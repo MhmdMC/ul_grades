@@ -1,0 +1,38 @@
+{% extends 'base.html' %} {% set title = 'Login - UL Grade Monitor' %} {% block
+content %}
+<div class="grid min-h-[calc(100vh-12rem)] place-items-center py-10">
+  <div
+    class="w-full max-w-md rounded-[2rem] border border-white/10 bg-white/6 p-8 shadow-glow backdrop-blur-xl"
+  >
+    <div class="mb-6">
+      <p class="text-sm uppercase tracking-[0.35em] text-slate-400">
+        Welcome back
+      </p>
+      <h1 class="mt-2 text-3xl font-semibold">Sign in to monitor grades</h1>
+      <p class="mt-2 text-sm text-slate-300">
+        Your session can stay active with remember me enabled.
+      </p>
+    </div>
+    <form method="post" class="space-y-4">
+      {{ form.hidden_tag() }}
+      <div>
+        <label class="mb-2 block text-sm text-slate-300">Username</label>
+        {{ form.username(class='w-full rounded-2xl border border-white/10
+        bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+      </div>
+      <div>
+        <label class="mb-2 block text-sm text-slate-300">Password</label>
+        {{ form.password(class='w-full rounded-2xl border border-white/10
+        bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+      </div>
+      <label class="flex items-center gap-3 text-sm text-slate-300">
+        {{ form.remember_me(class='h-4 w-4 rounded border-white/20
+        bg-slate-900') }} Keep me signed in
+      </label>
+      {{ form.submit(class='w-full rounded-2xl bg-gradient-to-r from-cyan-400
+      to-blue-500 px-4 py-3 font-semibold text-slate-950 transition
+      hover:scale-[1.01]') }}
+    </form>
+  </div>
+</div>
+{% endblock %}

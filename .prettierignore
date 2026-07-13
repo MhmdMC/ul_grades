@@ -1,0 +1,4 @@
+templates/**/*.html
+templates/**/*.htm
+templates/**/*.jinja
+templates/**/*.j2

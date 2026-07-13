@@ -1,0 +1,76 @@
+{% extends 'base.html' %} {% set title = 'Admin Dashboard - UL Grade Monitor' %}
+{% block content %}
+<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <p class="text-sm text-slate-400">Total users</p>
+    <p class="mt-2 text-3xl font-semibold">{{ total_users }}</p>
+  </div>
+  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <p class="text-sm text-slate-400">Online users</p>
+    <p class="mt-2 text-3xl font-semibold">{{ online_users }}</p>
+  </div>
+  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <p class="text-sm text-slate-400">Groups</p>
+    <p class="mt-2 text-3xl font-semibold">{{ groups }}</p>
+  </div>
+  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <p class="text-sm text-slate-400">Requests per minute</p>
+    <p class="mt-2 text-3xl font-semibold">{{ rpm }}</p>
+  </div>
+</div>
+<div class="mt-6 grid gap-4 xl:grid-cols-2">
+  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <p class="text-sm text-slate-400">Last polling time</p>
+    <p class="mt-2 text-lg font-semibold">
+      {{ last_poll if last_poll else 'Not available' }}
+    </p>
+  </div>
+  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <p class="text-sm text-slate-400">Average polling duration</p>
+    <p class="mt-2 text-lg font-semibold">{{ '%.2f'|format(avg_poll) }}s</p>
+  </div>
+</div>
+<section
+  class="mt-6 rounded-3xl border border-amber-400/20 bg-amber-400/10 p-6 shadow-glow"
+>
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <p class="text-sm uppercase tracking-[0.3em] text-amber-100/70">
+        Maintenance
+      </p>
+      <h2 class="mt-2 text-2xl font-semibold">Reset cached class IDs</h2>
+      <p class="mt-2 text-sm text-amber-50/80">
+        Clears every stored UL class ID and pauses monitoring so the next login
+        has to rebuild the class from the cookie.
+      </p>
+    </div>
+    <form method="post" action="{{ url_for('admin_reset_class_cache') }}">
+      {{ reset_class_cache_form.hidden_tag() }} {{
+      reset_class_cache_form.submit(class='rounded-2xl bg-amber-300 px-5 py-3
+      font-semibold text-slate-950') }}
+    </form>
+  </div>
+</section>
+<section
+  class="mt-6 rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-6 shadow-glow"
+>
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <p class="text-sm uppercase tracking-[0.3em] text-cyan-100/70">
+        Sound test
+      </p>
+      <h2 class="mt-2 text-2xl font-semibold">Play grade-change alarm</h2>
+      <p class="mt-2 text-sm text-cyan-50/80">
+        Runs the same alert sound the dashboard uses when a grade changes.
+      </p>
+    </div>
+    <button
+      id="test-grade-sound"
+      type="button"
+      class="rounded-2xl bg-cyan-300 px-5 py-3 font-semibold text-slate-950"
+    >
+      Test sound
+    </button>
+  </div>
+</section>
+{% endblock %}

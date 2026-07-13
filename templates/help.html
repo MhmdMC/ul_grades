@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% set title = 'How to find your UL Cookie - UL Grade Monitor' %}
+{% block content %}
+<div class="grid min-h-[calc(100vh-12rem)] place-items-center py-10">
+  <div class="w-full max-w-2xl rounded-[2rem] border border-white/10 bg-white/6 p-8 shadow-glow backdrop-blur-xl">
+    <h1 class="text-3xl font-semibold">How to find your UL Cookie</h1>
+    <p class="mt-4 text-slate-300">To connect your account, we need the <b>.AspNetCore.Identity.Application</b> cookie from the Lebanese University website.</p>
+    
+    <ol class="mt-6 space-y-4 list-decimal list-inside text-slate-300">
+      <li>Go to <a href="http://www.ulfg.ul.edu.lb/login" target="_blank" class="text-cyan-400 hover:text-cyan-300 underline">the UL login page</a> and log in normally.</li>
+      <li>Open Developer Tools in your browser (Right-click anywhere -> <b>Inspect</b> or press <b>F12</b>).</li>
+      <li>Go to the <b>Application</b> tab (or <b>Storage</b> in Firefox).</li>
+      <li>In the left sidebar, expand the <b>Cookies</b> section and click on <code class="bg-slate-900 px-1 rounded">http://www.ulfg.ul.edu.lb</code>.</li>
+      <li>Find the cookie named <code class="bg-slate-900 px-1 rounded">.AspNetCore.Identity.Application</code>.</li>
+      <li>Copy the entire <b>Value</b> of this cookie.</li>
+      <li>Paste it into the form on our <a href="{{ url_for('update_cookie') }}" class="text-cyan-400 hover:text-cyan-300 underline">cookie update page</a>.</li>
+    </ol>
+
+    <div class="mt-8">
+      <a href="{{ url_for('update_cookie') }}" class="inline-block rounded-2xl bg-slate-800 px-5 py-3 font-semibold text-white transition hover:bg-slate-700">Back to Update Cookie</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends 'base.html' %} {% set title = 'Admin Groups - UL Grade Monitor' %} {%
+block content %}
+<div class="space-y-4">
+  {% for row in groups %}
+  <section
+    class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow"
+  >
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <h2 class="text-2xl font-semibold">{{ row.group.name }}</h2>
+        <p class="text-sm text-slate-400">
+          Representative account: {{ row.group.representative_user.username if
+          row.group.representative_user else 'Not available' }}
+        </p>
+      </div>
+      <div
+        class="rounded-full border border-white/10 bg-slate-950/60 px-4 py-2 text-sm text-slate-300"
+      >
+        Users: {{ row.count }}
+      </div>
+    </div>
+    <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {% for user in row.members %}
+      <div class="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+        <p class="font-semibold">{{ user.username }}</p>
+        <p class="text-sm text-slate-400">
+          {{ user.ul_student_id or 'No student id' }}
+        </p>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="mt-4 text-sm text-slate-400">
+      Last detected change: {{ row.last_detected_change if
+      row.last_detected_change else 'Not available' }}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

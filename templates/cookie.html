@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% set title = 'Update UL Cookie - UL Grade Monitor' %}
+{% block content %}
+<div class="grid min-h-[calc(100vh-12rem)] place-items-center py-10">
+  <div class="w-full max-w-2xl rounded-[2rem] border border-amber-400/20 bg-white/6 p-8 shadow-glow backdrop-blur-xl">
+    <p class="text-sm uppercase tracking-[0.35em] text-amber-300">Authentication</p>
+    <h1 class="mt-2 text-3xl font-semibold">Update UL Connection</h1>
+    
+    <div class="mt-8 flex flex-col md:flex-row gap-8">
+      <!-- Credentials Form -->
+      <form method="post" class="flex-1 space-y-4">
+        {{ credentials_form.hidden_tag() }}
+        <h2 class="text-lg font-medium text-white">Login with UL</h2>
+        <div>
+          <label class="mb-2 block text-sm text-slate-300">Username</label>
+          {{ credentials_form.ul_username(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+        </div>
+        <div>
+          <label class="mb-2 block text-sm text-slate-300">Password</label>
+          {{ credentials_form.ul_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+        </div>
+        {{ credentials_form.submit(class='rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 font-semibold text-slate-950 transition hover:scale-[1.01] w-full') }}
+      </form>
+
+      <!-- Separator -->
+      <div class="hidden md:flex items-center">
+        <div class="h-full w-px bg-white/10"></div>
+      </div>
+      <div class="md:hidden w-full h-px bg-white/10"></div>
+
+      <!-- Cookie Form -->
+      <form method="post" class="flex-1 space-y-4">
+        {{ cookie_form.hidden_tag() }}
+        <div class="flex justify-between items-center">
+          <h2 class="text-lg font-medium text-white">Paste Cookie</h2>
+          <a href="{{ url_for('help_page') }}" class="text-xs text-cyan-400 hover:text-cyan-300">How to find it?</a>
+        </div>
+        <div>
+          {{ cookie_form.ul_cookie(class='min-h-[8rem] w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+        </div>
+        {{ cookie_form.submit(class='rounded-2xl bg-gradient-to-r from-amber-300 to-orange-400 px-5 py-3 font-semibold text-slate-950 transition hover:scale-[1.01] w-full') }}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
