@@ -1,0 +1,59 @@
+{% extends 'base.html' %} {% set title = 'Search students - UL Grade Monitor' %}
+{% block content %}
+<div class="section-stack">
+  <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="max-w-2xl">
+        <p class="eyebrow">Search</p>
+        <h1 class="mt-2 text-3xl font-semibold">Find a student</h1>
+        <p class="card-subtitle">
+          Search by name, or by the last 4 digits of a UL ID. You will only see
+          the grades they chose to make public.
+        </p>
+      </div>
+      <form method="get" class="flex flex-wrap items-center gap-2">
+        <input
+          name="q"
+          value="{{ search }}"
+          placeholder="Name or last 4 digits"
+          class="input w-64"
+          autofocus
+        />
+        <button class="btn btn-primary">Search</button>
+      </form>
+    </div>
+  </section>
+
+  {% if not search %}
+  <div class="empty-state">
+    Type a name or the last 4 digits of a UL ID to begin.
+  </div>
+  {% elif results %}
+  <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    {% for result in results %}
+    <a
+      class="card card-tight block transition hover:border-white/25"
+      href="{{ url_for('public_profile_page', username=result.user.username) }}"
+    >
+      <p class="text-lg font-semibold">{{ result.name }}</p>
+      <p class="card-subtitle">
+        {{ result.class_name }} &middot; ID &hellip;{{ result.last4 }}
+      </p>
+      <div class="mt-3">
+        {% if result.public_count %}
+        <span class="badge badge-public">
+          {{ result.public_count }} public grade{{ '' if result.public_count == 1
+          else 's' }}
+        </span>
+        {% else %}
+        <span class="badge badge-muted">Nothing public</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">No student matches &ldquo;{{ search }}&rdquo;.</div>
+  {% endif %}
+</div>
+{% endblock %}

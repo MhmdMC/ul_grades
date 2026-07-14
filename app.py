@@ -919,33 +919,36 @@ def overall_field_values(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def leaderboard_metrics(class_id: str) -> list[dict[str, Any]]:
-    """Every rankable column for a class: the two averages, plus partial and final
-    for each material anyone in the class actually has."""
-    metrics: list[dict[str, Any]] = [
-        {"key": overall_share_key("partial_average"), "label": "Partial average", "group": "Overall"},
-        {"key": overall_share_key("final_average"), "label": "Final average", "group": "Overall"},
-    ]
+OVERALL_SUBJECT = "overall"
+LEADERBOARD_KINDS: tuple[tuple[str, str], ...] = (("partial", "Partial"), ("final", "Final"))
+
+
+def leaderboard_subjects(class_id: str) -> list[dict[str, Any]]:
+    """What can be ranked in a class: the overall average, plus every material
+    anyone in the class actually has. Partial vs final is picked separately."""
+    subjects: list[dict[str, Any]] = [{"id": OVERALL_SUBJECT, "name": "Overall average"}]
 
     user_ids = [user.id for user in User.query.filter_by(ul_class_id=str(class_id), is_admin=False).all()]
     if not user_ids:
-        return metrics
+        return subjects
 
     material_ids = {grade.material_id for grade in Grade.query.filter(Grade.user_id.in_(user_ids)).all()}
     materials = sorted(
         ((material_id, material_lookup(material_id)) for material_id in material_ids),
         key=lambda item: str(item[1]["name"]).lower(),
     )
-    for material_id, lookup in materials:
-        for field, label in (("partial", "Partial"), ("final", "Final")):
-            metrics.append(
-                {
-                    "key": course_share_key(material_id, field),
-                    "label": f"{lookup['name']} - {label}",
-                    "group": lookup["name"],
-                }
-            )
-    return metrics
+    subjects.extend({"id": material_id, "name": lookup["name"]} for material_id, lookup in materials)
+    return subjects
+
+
+def metric_key_for(subject: str, kind: str) -> str | None:
+    """Fold the two dropdowns back into one share key, so leaderboard visibility
+    and the sharing system stay keyed the same way."""
+    if kind not in {key for key, _ in LEADERBOARD_KINDS}:
+        return None
+    if subject == OVERALL_SUBJECT:
+        return overall_share_key(f"{kind}_average")
+    return course_share_key(subject, kind)
 
 
 def metric_value_for_user(user: User, metric_key: str) -> float | None:
@@ -1029,6 +1032,97 @@ def build_leaderboard(class_id: str, metric_key: str, viewer: User) -> list[dict
             previous_rank = index
             previous_value = row["value"]
     return rows
+
+
+def viewable_profile(user: User, viewer: User) -> dict[str, Any] | None:
+    """The full grade sheet, with each field marked visible or hidden.
+
+    A hidden field carries value=None: the real number never reaches the template,
+    so it cannot be recovered from the HTML. The blur is only cosmetic.
+    """
+    normalized = stored_snapshot(user)
+    if normalized is None:
+        return None
+
+    keys = public_keys_for(user)
+    is_self = viewer.id == user.id
+    # Admins may additionally see the grades of students who consented at register.
+    consent_override = bool(getattr(viewer, "is_admin", False)) and user.hostage_consent
+
+    def is_visible(key: str) -> bool:
+        return is_self or consent_override or key in keys
+
+    overall_values = overall_field_values(normalized)
+    overall: list[dict[str, Any]] = []
+    for field, label in OVERALL_SHARE_FIELDS:
+        visible = is_visible(overall_share_key(field))
+        overall.append(
+            {
+                "label": label,
+                "visible": visible,
+                "value": overall_values.get(field) if visible else None,
+            }
+        )
+
+    courses: list[dict[str, Any]] = []
+    for course in normalized.get("courses", []):
+        values = course_field_values(course)
+        fields: list[dict[str, Any]] = []
+        for field, label in COURSE_SHARE_FIELDS:
+            visible = is_visible(course_share_key(course["key"], field))
+            value = values.get(field) if visible else None
+            fields.append(
+                {
+                    "label": label,
+                    "visible": visible,
+                    "value": value,
+                    "color": grade_color(value) if visible and field in ("partial", "final") else "neutral",
+                }
+            )
+        courses.append({"code": course.get("course_code"), "name": course.get("course_name"), "fields": fields})
+
+    visible_count = sum(1 for item in overall if item["visible"])
+    visible_count += sum(1 for course in courses for field in course["fields"] if field["visible"])
+    total_count = len(overall) + sum(len(course["fields"]) for course in courses)
+
+    return {
+        "user": user,
+        "overall": overall,
+        "courses": courses,
+        "class_name": class_display_name(user.ul_class_id),
+        "visible_count": visible_count,
+        "total_count": total_count,
+        "revealed_by_consent": consent_override and not is_self,
+        "is_self": is_self,
+    }
+
+
+def search_students(query: str, limit: int = 40) -> list[dict[str, Any]]:
+    """Match on the last 4 digits of the UL id, or on the UL name."""
+    needle = query.strip().lower()
+    if not needle:
+        return []
+
+    candidates = User.query.filter(User.is_admin.is_(False), User.ul_student_id.isnot(None)).all()
+    results: list[dict[str, Any]] = []
+    for student in candidates:
+        last4 = str(student.ul_student_id or "")[-4:]
+        by_id = needle.isdigit() and needle in last4
+        by_name = bool(student.ul_name) and needle in student.ul_name.lower()
+        if not (by_id or by_name):
+            continue
+        results.append(
+            {
+                "user": student,
+                "name": student.ul_name or student.username,
+                "last4": last4,
+                "class_name": class_display_name(student.ul_class_id),
+                "public_count": len(public_keys_for(student)),
+            }
+        )
+
+    results.sort(key=lambda item: str(item["name"]).lower())
+    return results[:limit]
 
 
 def public_profile(user: User) -> dict[str, Any] | None:
@@ -1851,17 +1945,26 @@ def leaderboard():
     if selected_class_id and selected_class_id not in ranked_class_ids:
         selected_class_id = ""
 
-    metrics: list[dict[str, Any]] = []
+    subjects: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
-    selected_metric = ""
+    selected_subject = OVERALL_SUBJECT
+    selected_kind = "partial"
 
     if selected_class_id:
-        metrics = leaderboard_metrics(selected_class_id)
-        valid_keys = {metric["key"] for metric in metrics}
-        selected_metric = request.args.get("metric") or overall_share_key("partial_average")
-        if selected_metric not in valid_keys:
-            selected_metric = overall_share_key("partial_average")
-        rows = build_leaderboard(selected_class_id, selected_metric, current_user)
+        subjects = leaderboard_subjects(selected_class_id)
+        valid_subjects = {subject["id"] for subject in subjects}
+
+        selected_subject = request.args.get("subject") or OVERALL_SUBJECT
+        if selected_subject not in valid_subjects:
+            selected_subject = OVERALL_SUBJECT
+
+        selected_kind = request.args.get("kind") or "partial"
+        if selected_kind not in {key for key, _ in LEADERBOARD_KINDS}:
+            selected_kind = "partial"
+
+        metric_key = metric_key_for(selected_subject, selected_kind)
+        if metric_key:
+            rows = build_leaderboard(selected_class_id, metric_key, current_user)
 
     return render_template(
         "leaderboard.html",
@@ -1869,8 +1972,10 @@ def leaderboard():
         classes=classes,
         selected_class_id=selected_class_id,
         selected_class_name=class_display_name(selected_class_id) if selected_class_id else None,
-        metrics=metrics,
-        selected_metric=selected_metric,
+        subjects=subjects,
+        kinds=LEADERBOARD_KINDS,
+        selected_subject=selected_subject,
+        selected_kind=selected_kind,
         rows=rows,
         revealed_count=sum(1 for row in rows if row["revealed"]),
     )
@@ -1911,16 +2016,22 @@ def public_directory():
     return render_template("public/directory.html", classes=classes)
 
 
+@app.route("/search")
+@login_required
+def search_page():
+    query = request.args.get("q", "").strip()
+    return render_template("public/search.html", search=query, results=search_students(query) if query else [])
+
+
 @app.route("/u/<username>")
 @login_required
 def public_profile_page(username: str):
     user = User.query.filter_by(username=username).first()
-    if not user:
+    if not user or user.is_admin:
         abort(404)
-    profile = public_profile(user)
+    profile = viewable_profile(user, current_user)
     if not profile:
         abort(404)
-    profile["class_name"] = class_display_name(user.ul_class_id)
     return render_template("public/profile.html", profile=profile)
 
 

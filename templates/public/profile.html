@@ -1,39 +1,70 @@
-{% extends 'base.html' %} {% set title = profile.user.username + ' - Public
-grades' %} {% block content %}
+{% extends 'base.html' %} {% set title = profile.user.username + ' - Grades' %}
+{% block content %}
+
+{#- A hidden field carries no value from the server. There is nothing in this
+    markup to un-blur: the number simply is not here. -#}
+{% macro grade_cell(item) %}
+<div class="stat">
+  <p class="stat-label">{{ item.label }}</p>
+  {% if item.visible %}
+  <p class="stat-value stat-value-sm value-{{ item.color }}">
+    {{ item.value if item.value is not none else 'Not available' }}
+  </p>
+  {% else %}
+  <p class="stat-value stat-value-sm is-hidden-grade" aria-label="Hidden">
+    <span aria-hidden="true">••••</span>
+  </p>
+  {% endif %}
+</div>
+{% endmacro %}
+
 <div class="section-stack">
   <section class="card">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <p class="eyebrow">Public page</p>
+        <p class="eyebrow">Student</p>
         <h1 class="mt-2 text-3xl font-semibold">
           {{ profile.user.ul_name or profile.user.username }}
         </h1>
         <p class="card-subtitle">
-          {{ profile.class_name }} &middot; only the items
-          {{ profile.user.username }} chose to publish are shown here.
+          {{ profile.class_name }} &middot; ID ending in
+          {{ profile.user.ul_student_id[-4:] if profile.user.ul_student_id else
+          '----' }}
         </p>
       </div>
-      <a class="btn btn-sm" href="{{ url_for('public_directory') }}"
-        >All classes</a
-      >
+      <div class="flex flex-wrap items-center gap-2">
+        {% if profile.is_self %}
+        <span class="badge badge-public">Your page</span>
+        {% elif profile.revealed_by_consent %}
+        <span class="badge badge-muted">Revealed by consent</span>
+        {% endif %}
+        <span class="badge">
+          {{ profile.visible_count }} / {{ profile.total_count }} visible
+        </span>
+        <a class="btn btn-sm" href="{{ url_for('search_page') }}">Search</a>
+      </div>
     </div>
+
+    {% if profile.visible_count == 0 %}
+    <div class="alert alert-info mt-5">
+      This student has not made any grades public.
+    </div>
+    {% elif profile.revealed_by_consent %}
+    <div class="alert alert-warning mt-5">
+      You are seeing grades this student did not publish, because they consented
+      to it at registration.
+    </div>
+    {% endif %}
   </section>
 
-  {% if profile.overall %}
   <section>
     <h2 class="card-title mb-3">Overall</h2>
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {% for item in profile.overall %}
-      <div class="stat">
-        <p class="stat-label">{{ item.label }}</p>
-        <p class="stat-value">
-          {{ item.value if item.value is not none else 'Not available' }}
-        </p>
-      </div>
-      {% endfor %}
+      {% for item in profile.overall %} {{ grade_cell(item) }} {% endfor %}
     </div>
   </section>
-  {% endif %} {% if profile.courses %}
+
+  {% if profile.courses %}
   <section>
     <h2 class="card-title mb-3">Courses</h2>
     <div class="grid gap-4 xl:grid-cols-2">
@@ -44,14 +75,7 @@ grades' %} {% block content %}
           <span class="badge badge-muted">{{ course.code }}</span>
         </div>
         <div class="mt-4 grid gap-3 sm:grid-cols-2">
-          {% for item in course.fields %}
-          <div class="stat">
-            <p class="stat-label">{{ item.label }}</p>
-            <p class="stat-value value-{{ item.color }}">
-              {{ item.value if item.value is not none else 'Not available' }}
-            </p>
-          </div>
-          {% endfor %}
+          {% for item in course.fields %} {{ grade_cell(item) }} {% endfor %}
         </div>
       </article>
       {% endfor %}

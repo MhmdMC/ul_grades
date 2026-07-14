@@ -46,26 +46,52 @@ block content %}
   {% endif %} {% if selected_class_id %}
   <section class="card">
     <h2 class="card-title">Ranking by</h2>
-    <form method="get" class="mt-4 flex flex-wrap items-center gap-2">
+    <form method="get" class="mt-4 flex flex-wrap items-end gap-3">
       <input type="hidden" name="class_id" value="{{ selected_class_id }}" />
       <input type="hidden" name="q" value="{{ search }}" />
-      <select name="metric" class="select w-auto min-w-[18rem]">
-        {% for metric in metrics %}
-        <option
-          value="{{ metric.key }}"
-          {%
-          if
-          metric.key
-          ==
-          selected_metric
-          %}selected{%
-          endif
-          %}
-        >
-          {{ metric.label }}
-        </option>
-        {% endfor %}
-      </select>
+
+      <div class="w-full sm:w-72">
+        <label class="field-label" for="subject">Subject</label>
+        <select id="subject" name="subject" class="select">
+          {% for subject in subjects %}
+          <option
+            value="{{ subject.id }}"
+            {%
+            if
+            subject.id
+            ==
+            selected_subject
+            %}selected{%
+            endif
+            %}
+          >
+            {{ subject.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="w-full sm:w-36">
+        <label class="field-label" for="kind">Grade</label>
+        <select id="kind" name="kind" class="select">
+          {% for value, label in kinds %}
+          <option
+            value="{{ value }}"
+            {%
+            if
+            value
+            ==
+            selected_kind
+            %}selected{%
+            endif
+            %}
+          >
+            {{ label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
       <button class="btn btn-primary">Show ranking</button>
     </form>
   </section>

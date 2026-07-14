@@ -402,6 +402,16 @@ details[open] .details-chevron {
   color: #e2e8f0;
 }
 
+/* Cosmetic only. The real value is never rendered for a hidden field, so there
+   is nothing here for a reader to recover by removing the blur. */
+.is-hidden-grade {
+  color: var(--text-muted);
+  filter: blur(5px);
+  user-select: none;
+  pointer-events: none;
+  letter-spacing: 0.15em;
+}
+
 .empty-state {
   border-radius: 1.5rem;
   border: 1px dashed var(--line-strong);
