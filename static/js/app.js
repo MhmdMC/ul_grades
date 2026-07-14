@@ -17,7 +17,7 @@
     .forEach((row) => rows.set(row.dataset.courseKey, row));
 
   const socket = window.io
-    ? window.io({ transports: ["websocket", "polling"] })
+    ? window.io({ transports: ["polling", "websocket"] })
     : null;
   let audioContext = null;
   let monitoringStarted = false;

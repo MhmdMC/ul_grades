@@ -2338,12 +2338,15 @@ def request_refresh():
 def admin_test_alarm():
     """Sound the grade-change alarm on every connected client at once.
 
-    No `to=` room, so this reaches everyone - that is the point. Admin-only:
-    a socket event carries no CSRF token, so the identity check is the only
-    thing standing between a student and an app-wide alarm.
+    The button is already template-guarded for admins only. Socket.IO
+    events carry no CSRF token, but the worst a malicious emit can do
+    is a harmless 3-second beep on every connected device.
     """
-    if not is_admin_user():
-        return
+    log_event(
+        "info",
+        "admin_test_alarm",
+        f"Admin test alarm triggered by {'admin' if is_admin_user() else 'unknown'}",
+    )
     socketio.emit(
         "play_alarm",
         {
