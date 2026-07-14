@@ -4,7 +4,7 @@ import sys
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from time import perf_counter
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -25,14 +25,23 @@ DEFAULT_HEADERS = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class ULAPIResponse:
     endpoint: str
     status_code: int
     response_time: float
     duration: float
-    json_data: Any | None
-    text: str | None = None
+    json_data: Optional[Any]
+    text: Optional[str] = None
+    
+    __slots__ = (
+        'endpoint', 
+        'status_code', 
+        'response_time', 
+        'duration', 
+        'json_data', 
+        'text'
+    )
 
 
 class ULAPIError(RuntimeError):
