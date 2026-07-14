@@ -2334,6 +2334,26 @@ def request_refresh():
         socketio.emit("dashboard_payload", dashboard_context(current_user), to=f"user-{current_user.id}")
 
 
+@socketio.on("admin_test_alarm")
+def admin_test_alarm():
+    """Sound the grade-change alarm on every connected client at once.
+
+    No `to=` room, so this reaches everyone - that is the point. Admin-only:
+    a socket event carries no CSRF token, so the identity check is the only
+    thing standing between a student and an app-wide alarm.
+    """
+    if not is_admin_user():
+        return
+    socketio.emit(
+        "play_alarm",
+        {
+            "seconds": 3,
+            "title": "Sound test",
+            "message": "An admin triggered the grade-change alarm. This is not a grade change.",
+        },
+    )
+
+
 @app.errorhandler(403)
 def forbidden(_error):
     return render_template("errors/403.html"), 403

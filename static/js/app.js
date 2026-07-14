@@ -182,13 +182,24 @@
   }
 
   function testGradeSound() {
+    // Unlock first: the alarm comes back to this browser as a broadcast like
+    // any other client's, and audio will not play without a user gesture.
     ensureAudioUnlocked();
-    toast(
-      "Sound test",
-      "This is the same alert used for live grade changes.",
-      "info",
-    );
-    playAlarm(2);
+
+    if (!socket) {
+      toast(
+        "Not connected",
+        "No live connection, so the alarm was played here only.",
+        "warning",
+      );
+      playAlarm(2);
+      return;
+    }
+
+    if (!window.confirm("Play the alarm for every connected user right now?"))
+      return;
+
+    socket.emit("admin_test_alarm");
   }
 
   if (overlay && localStorage.getItem("ul_grade_monitor_unlocked") === "1") {
@@ -250,6 +261,14 @@
     socket.on("toast", (data) =>
       toast(data.title || "Update", data.message || "", data.kind || "info"),
     );
+    socket.on("play_alarm", (data) => {
+      toast(
+        data?.title || "Sound test",
+        data?.message || "An admin triggered the grade-change alarm.",
+        "info",
+      );
+      playAlarm(data?.seconds || 3);
+    });
     socket.on("dashboard_payload", updateDashboard);
     socket.on("grade_change", (payload) => {
       updateDashboard(payload);
