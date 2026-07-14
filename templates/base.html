@@ -5,20 +5,61 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content="{{ csrf_token() }}" />
     <title>{{ title or 'UL Grade Monitor' }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
+      // Single source of truth for color. Mirrored as CSS custom properties in
+      // app.css (:root). Never hardcode a color in a template.
+      //
+      // borderRadius and fontSize are defined OUTSIDE `extend` on purpose: that
+      // replaces Tailwind's default scales rather than adding to them, so the
+      // oversized radius and type utilities no longer exist as classes at all.
+      // The scale cannot drift back (§3, §4).
       tailwind.config = {
         theme: {
+          borderRadius: {
+            none: "0",
+            DEFAULT: "6px",
+            full: "999px",
+          },
+          fontSize: {
+            sm: "12px",
+            base: "14px",
+            lg: "18px",
+            display: "28px",
+          },
+          fontFamily: {
+            ui: ["IBM Plex Sans", "ui-sans-serif", "system-ui", "sans-serif"],
+            num: ["IBM Plex Mono", "ui-monospace", "monospace"],
+          },
           extend: {
             colors: {
-              bg: "#08111f",
-              panel: "#101b2d",
-              panel2: "#16253b",
-              line: "#22324b",
-              accent: "#53d6b7",
-              accent2: "#70a5ff",
-              danger: "#ff6b6b",
-              warn: "#ffb84d",
+              bg: "#FFFFFF",
+              panel: "#F7F8FA",
+              "panel-hover": "#F1F3F6",
+              line: "#D8DCE2",
+              "line-hard": "#B6BCC6",
+
+              text: "#0F1720",
+              "text-mid": "#4A5563",
+              "text-mute": "#7A8494",
+
+              accent: "#3D63A7",
+              "accent-hover": "#325288",
+              "accent-soft": "#EDF1F8",
+
+              "gold-bar": "#E2B105",
+              "gold-bg": "#FCF2CE",
+              "gold-text": "#8A6A04",
+
+              pass: "#17803D",
+              warn: "#8A6A04",
+              fail: "#B91C1C",
             },
           },
         },
@@ -31,29 +72,31 @@
     <script defer src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
   </head>
-  <body class="min-h-screen bg-bg text-slate-100 antialiased">
-    <div
-      class="relative mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-4 py-6 lg:px-8"
+  <body class="flex min-h-screen flex-col bg-bg text-text antialiased">
+    {% macro nav_item(endpoint, label) %}
+    <a
+      class="nav-link {{ 'is-active' if request.endpoint == endpoint else '' }}"
+      href="{{ url_for(endpoint) }}"
+      >{{ label }}</a
     >
-      {% macro nav_item(endpoint, label) %}
-      <a
-        class="nav-link {{ 'is-active' if request.endpoint == endpoint else '' }}"
-        href="{{ url_for(endpoint) }}"
-        >{{ label }}</a
-      >
-      {% endmacro %}
+    {% endmacro %}
 
-      <header
-        class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-white/10 bg-white/5 px-5 py-4"
-      >
-        <a href="{{ url_for('index') }}" class="block">
-          <div class="meta">UL Faculty of Engineering</div>
-          <div class="mt-1 text-2xl font-semibold">UL Grade Monitor</div>
+    {# The signature element (§5). The only large area of color in the app.
+       Full-bleed, so it sits outside the centered container. #}
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-brand" href="{{ url_for('index') }}">
+          <img
+            class="site-logo"
+            src="{{ url_for('static', filename='logo-ulfg-port.png') }}"
+            alt="Lebanese University, Faculty of Engineering"
+          />
+          <span class="site-wordmark">UL Grade Monitor</span>
         </a>
-        <nav class="flex flex-wrap items-center gap-1.5">
+        <nav class="site-nav">
           {% if not current_user.is_authenticated %} {{ nav_item('help_page',
           'Help') }} {{ nav_item('login', 'Login') }}
-          <a class="btn btn-primary btn-sm" href="{{ url_for('register') }}"
+          <a class="btn btn-on-accent btn-sm" href="{{ url_for('register') }}"
             >Register</a
           >
           {% elif is_admin %} {{ nav_item('admin_dashboard', 'Admin') }} {{
@@ -73,8 +116,12 @@
           <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
           {% endif %}
         </nav>
-      </header>
+      </div>
+    </header>
 
+    <div
+      class="mx-auto flex w-full max-w-[1600px] flex-1 flex-col px-4 py-6 lg:px-8"
+    >
       {% with messages = get_flashed_messages(with_categories=true) %} {% if
       messages %}
       <div class="mb-6 space-y-3">

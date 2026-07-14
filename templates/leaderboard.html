@@ -5,7 +5,7 @@ block content %}
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div class="max-w-2xl">
         <p class="meta">Leaderboard</p>
-        <h1 class="mt-2 text-3xl font-semibold">Class rankings</h1>
+        <h1 class="mt-2 text-lg font-semibold">Class rankings</h1>
         <p class="card-subtitle">
           Grades are ranked anonymously. A name only appears when that student
           published that exact grade{% if is_admin %}, or consented to the
@@ -100,27 +100,27 @@ block content %}
     <table class="table">
       <thead>
         <tr>
-          <th class="w-20">Rank</th>
+          <th class="num w-20">Rank</th>
           <th>Student</th>
-          <th class="w-40">Grade</th>
+          <th class="num w-40">Grade</th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
         <tr>
-          <td class="font-semibold">#{{ row.rank }}</td>
+          <td class="num font-semibold">{{ row.rank }}</td>
           <td>
             <div class="flex flex-wrap items-center gap-2">
               {% if row.profile_url %}
               <a
-                class="font-semibold text-cyan-200 hover:text-cyan-100"
+                class="font-semibold text-accent hover:text-accent-hover"
                 href="{{ row.profile_url }}"
                 >{{ row.name }}</a
               >
               {% elif row.revealed %}
               <span class="font-semibold">{{ row.name }}</span>
               {% else %}
-              <span class="text-slate-400">Anonymous</span>
+              <span class="text-text-mute">Anonymous</span>
               {% endif %} {% if row.is_self %}
               <span class="badge badge-public">You</span>
               {% elif row.reveal_reason == 'consent' %}
@@ -128,13 +128,13 @@ block content %}
               {% endif %}
             </div>
           </td>
-          <td class="value-{{ row.color }} text-lg font-semibold">
+          <td class="num value-{{ row.color }} font-medium">
             {{ row.value }}
           </td>
         </tr>
         {% else %}
         <tr>
-          <td colspan="3" class="text-center text-slate-400">
+          <td colspan="3" class="text-center text-text-mute">
             Nobody in this class has a grade for that yet.
           </td>
         </tr>
@@ -144,7 +144,7 @@ block content %}
   </section>
 
   {% if rows %}
-  <p class="text-sm text-slate-400">
+  <p class="text-base text-text-mute">
     {{ rows | length }} student{{ '' if rows | length == 1 else 's' }} ranked
     &middot; {{ revealed_count }} name{{ '' if revealed_count == 1 else 's' }}
     visible to you.

@@ -1,9 +1,9 @@
 {% extends 'base.html' %} {% set title = 'Login - UL Grade Monitor' %} {% block
 content %}
 <div class="grid min-h-[calc(100vh-14rem)] place-items-center py-8">
-  <div class="card w-full max-w-md backdrop-blur-xl">
+  <div class="card w-full max-w-md">
     <p class="meta">Welcome back</p>
-    <h1 class="mt-2 text-3xl font-semibold">Sign in to monitor grades</h1>
+    <h1 class="mt-2 text-lg font-semibold">Sign in to monitor grades</h1>
     <p class="card-subtitle">
       Your session can stay active with remember me enabled.
     </p>
@@ -27,7 +27,7 @@ content %}
 
     <p class="card-subtitle mt-6 text-center">
       No account yet?
-      <a class="text-cyan-300 hover:text-cyan-200" href="{{ url_for('register') }}"
+      <a class="text-accent hover:text-accent-hover" href="{{ url_for('register') }}"
         >Create one</a
       >
     </p>

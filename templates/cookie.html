@@ -1,9 +1,9 @@
 {% extends 'base.html' %} {% set title = 'Update UL Connection - UL Grade Monitor'
 %} {% block content %}
 <div class="mx-auto max-w-4xl py-8">
-  <div class="card backdrop-blur-xl">
+  <div class="card">
     <p class="meta">Authentication</p>
-    <h1 class="mt-2 text-3xl font-semibold">Update UL connection</h1>
+    <h1 class="mt-2 text-lg font-semibold">Update UL connection</h1>
     <p class="card-subtitle">
       Signing in with your UL login lets the monitor renew the cookie by itself
       the next time it expires.
@@ -26,12 +26,12 @@
         {{ credentials_form.submit(class='btn btn-primary btn-block') }}
       </form>
 
-      <form method="post" class="space-y-4 md:border-l md:border-white/10 md:pl-8">
+      <form method="post" class="space-y-4 md:border-l md:border-line md:pl-8">
         {{ cookie_form.hidden_tag() }}
         <div class="flex items-center justify-between gap-2">
           <h2 class="card-title">Paste cookie</h2>
           <a
-            class="text-xs text-cyan-300 hover:text-cyan-200"
+            class="text-sm text-accent hover:text-accent-hover"
             href="{{ url_for('help_page') }}"
             >How to find it?</a
           >

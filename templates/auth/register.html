@@ -1,9 +1,9 @@
 {% extends 'base.html' %} {% set title = 'Register - UL Grade Monitor' %} {%
 block content %}
 <div class="mx-auto max-w-4xl py-8">
-  <div class="card backdrop-blur-xl">
+  <div class="card">
     <p class="meta">Create account</p>
-    <h1 class="mt-2 text-3xl font-semibold">Set up your monitoring profile</h1>
+    <h1 class="mt-2 text-lg font-semibold">Set up your monitoring profile</h1>
     <p class="card-subtitle">
       Pick either method &mdash; signing in with your UL login lets the monitor
       renew its own cookie automatically.
@@ -33,19 +33,19 @@ block content %}
 
         <label class="check-row items-start">
           {{ credentials_form.hostage_consent(class='checkbox mt-0.5') }}
-          <span class="text-xs text-slate-400">
+          <span class="text-sm text-text-mute">
             {{ credentials_form.hostage_consent.label.text }}
           </span>
         </label>
         {{ credentials_form.submit(class='btn btn-primary btn-block') }}
       </form>
 
-      <form method="post" class="space-y-4 md:border-l md:border-white/10 md:pl-8">
+      <form method="post" class="space-y-4 md:border-l md:border-line md:pl-8">
         {{ cookie_form.hidden_tag() }}
         <div class="flex items-center justify-between gap-2">
           <h2 class="card-title">Register with cookie</h2>
           <a
-            class="text-xs text-cyan-300 hover:text-cyan-200"
+            class="text-sm text-accent hover:text-accent-hover"
             href="{{ url_for('help_page') }}"
             >How to find it?</a
           >
@@ -66,7 +66,7 @@ block content %}
 
         <label class="check-row items-start">
           {{ cookie_form.hostage_consent(class='checkbox mt-0.5') }}
-          <span class="text-xs text-slate-400">
+          <span class="text-sm text-text-mute">
             {{ cookie_form.hostage_consent.label.text }}
           </span>
         </label>
@@ -76,7 +76,7 @@ block content %}
 
     <p class="card-subtitle mt-8 text-center">
       Already registered?
-      <a class="text-cyan-300 hover:text-cyan-200" href="{{ url_for('login') }}"
+      <a class="text-accent hover:text-accent-hover" href="{{ url_for('login') }}"
         >Sign in</a
       >
     </p>

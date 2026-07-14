@@ -3,7 +3,7 @@ block content %}
 <div class="section-stack">
   <section class="card">
     <p class="meta">Public</p>
-    <h1 class="mt-2 text-3xl font-semibold">Shared grades by class</h1>
+    <h1 class="mt-2 text-lg font-semibold">Shared grades by class</h1>
     <p class="card-subtitle">
       Open a class to see the students who published part of their results.
       Everything not explicitly shared stays private.
@@ -32,7 +32,7 @@ block content %}
       <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {% for entry in school_class.students %}
         <a
-          class="stat block transition hover:border-white/25"
+          class="stat block transition hover:border-line-hard"
           href="{{ url_for('public_profile_page', username=entry.user.username) }}"
         >
           <p class="font-semibold">

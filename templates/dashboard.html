@@ -12,14 +12,14 @@ block content %}
   {% else %}
   <div
     id="enter-overlay"
-    class="fixed inset-0 z-40 grid place-items-center bg-slate-950/95 px-6"
+    class="fixed inset-0 z-40 grid place-items-center bg-bg px-6"
   >
-    <div class="card max-w-xl text-center backdrop-blur-xl">
+    <div class="card max-w-xl text-center">
       <p class="meta">UL Grade Monitor</p>
-      <h1 class="mt-3 text-4xl font-semibold">
+      <h1 class="mt-3 text-lg font-semibold">
         This page plays sounds when grades change.
       </h1>
-      <p class="mt-4 text-slate-300">Click Enter to begin monitoring.</p>
+      <p class="mt-4 text-text-mid">Click Enter to begin monitoring.</p>
       <button id="enter-monitoring" class="btn btn-primary mt-8">ENTER</button>
     </div>
   </div>
@@ -29,7 +29,7 @@ block content %}
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p class="meta">Dashboard</p>
-        <h1 id="student-name" class="mt-2 text-3xl font-semibold">
+        <h1 id="student-name" class="mt-2 text-lg font-semibold">
           {{ user.ul_name or snapshot.student_name or 'Not available' }}
         </h1>
         <p class="card-subtitle">
@@ -59,7 +59,10 @@ block content %}
     snapshot.final_rank) ] %}
     <div class="stat">
       <p class="stat-label">{{ label }}</p>
-      <p id="{{ stat_id }}" class="stat-value">
+      <p
+        id="{{ stat_id }}"
+        class="stat-value {{ 'stat-display' if stat_id == 'stat-average' }}"
+      >
         {{ value if value is not none else 'Not available' }}
       </p>
     </div>
@@ -74,8 +77,8 @@ block content %}
       <article class="grade-card card" data-course-key="{{ course.key }}">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p class="text-lg font-semibold text-cyan-200">{{ course.name }}</p>
-            <p class="text-sm text-slate-400">{{ course.code }}</p>
+            <p class="text-lg font-semibold text-text">{{ course.name }}</p>
+            <p class="text-base text-text-mute">{{ course.code }}</p>
           </div>
           <span class="badge badge-muted">
             Credits: {{ course.credits if course.credits is not none else 'N/A'

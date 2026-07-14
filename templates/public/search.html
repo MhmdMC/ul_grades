@@ -5,7 +5,7 @@
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div class="max-w-2xl">
         <p class="meta">Search</p>
-        <h1 class="mt-2 text-3xl font-semibold">Find a student</h1>
+        <h1 class="mt-2 text-lg font-semibold">Find a student</h1>
         <p class="card-subtitle">
           Search by name, or by the last 4 digits of a UL ID. You will only see
           the grades they chose to make public.
@@ -32,7 +32,7 @@
   <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
     {% for result in results %}
     <a
-      class="card card-tight block transition hover:border-white/25"
+      class="card card-tight block transition hover:border-line-hard"
       href="{{ url_for('public_profile_page', username=result.user.username) }}"
     >
       <p class="text-lg font-semibold">{{ result.name }}</p>

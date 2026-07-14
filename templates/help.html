@@ -1,23 +1,23 @@
 {% extends 'base.html' %} {% set title = 'How to find your UL cookie - UL Grade
 Monitor' %} {% block content %}
 <div class="mx-auto max-w-3xl py-8">
-  <div class="card backdrop-blur-xl">
+  <div class="card">
     <p class="meta">Help</p>
-    <h1 class="mt-2 text-3xl font-semibold">How to find your UL cookie</h1>
+    <h1 class="mt-2 text-lg font-semibold">How to find your UL cookie</h1>
     <p class="card-subtitle">
       To connect your account we need the
-      <b class="text-slate-200">.AspNetCore.Identity.Application</b> cookie from
+      <b class="text-text">.AspNetCore.Identity.Application</b> cookie from
       the Lebanese University website.
     </p>
 
-    <ol class="mt-6 list-inside list-decimal space-y-3 text-sm text-slate-300">
+    <ol class="mt-6 list-inside list-decimal space-y-3 text-base text-text-mid">
       <li>
         Go to
         <a
           href="http://www.ulfg.ul.edu.lb/login"
           target="_blank"
           rel="noreferrer"
-          class="text-cyan-300 underline hover:text-cyan-200"
+          class="text-accent underline hover:text-accent-hover"
           >the UL login page</a
         >
         and log in normally.
@@ -29,15 +29,10 @@ Monitor' %} {% block content %}
       <li>Go to the <b>Application</b> tab (<b>Storage</b> in Firefox).</li>
       <li>
         In the sidebar expand <b>Cookies</b> and select
-        <code class="rounded bg-slate-900 px-1"
-          >http://www.ulfg.ul.edu.lb</code
-        >.
+        <code>http://www.ulfg.ul.edu.lb</code>.
       </li>
       <li>
-        Find the cookie named
-        <code class="rounded bg-slate-900 px-1"
-          >.AspNetCore.Identity.Application</code
-        >.
+        Find the cookie named <code>.AspNetCore.Identity.Application</code>.
       </li>
       <li>Copy its entire <b>Value</b>.</li>
       <li>Paste it into the cookie form.</li>

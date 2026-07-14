@@ -5,7 +5,7 @@ block content %}
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
         <p class="meta">Admin</p>
-        <h1 class="mt-2 text-3xl font-semibold">Users</h1>
+        <h1 class="mt-2 text-lg font-semibold">Users</h1>
         <p class="card-subtitle">
           Search, sort, copy data, reset cookies, and move users between groups.
         </p>
@@ -79,7 +79,7 @@ block content %}
           <td>{{ user.group.name if user.group else 'Not available' }}</td>
           <td class="max-w-[240px]">
             <div class="flex items-center gap-2">
-              <span class="min-w-0 flex-1 truncate text-slate-400">
+              <span class="min-w-0 flex-1 truncate text-text-mute">
                 {{ user.ul_cookie or 'Not available' }}
               </span>
               {% if user.ul_cookie %}
