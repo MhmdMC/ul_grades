@@ -46,7 +46,7 @@
     if (audioContext.state === "suspended") audioContext.resume();
   }
 
-  function beep(durationMs = 180, frequency = 880) {
+  function beep(durationMs = 360, frequency = 880) {
     if (!audioContext) return;
     const oscillator = audioContext.createOscillator();
     const gain = audioContext.createGain();
@@ -54,7 +54,7 @@
     oscillator.frequency.value = frequency;
     oscillator.connect(gain);
     gain.connect(audioContext.destination);
-    gain.gain.value = 0.05;
+    gain.gain.value = 1;
     oscillator.start();
     setTimeout(() => {
       oscillator.stop();
@@ -67,10 +67,10 @@
     ensureAudioUnlocked();
     const started = Date.now();
     const timer = setInterval(() => {
-      beep(180, 880);
+      beep(360, 880);
       if (Date.now() - started >= seconds * 1000) clearInterval(timer);
     }, 350);
-    beep(180, 660);
+    beep(360, 660);
   }
 
   const TOAST_KINDS = new Set(["success", "warning", "error", "info"]);
