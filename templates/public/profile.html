@@ -3,16 +3,30 @@
 
 {#- A hidden field carries no value from the server. There is nothing in this
     markup to un-blur: the number simply is not here. -#}
-{% macro grade_cell(item) %}
+{% macro grade_td(item) %}
+{% if not item.visible %}
+<td class="num is-hidden-grade" aria-label="Hidden">
+  <span aria-hidden="true">••••</span>
+</td>
+{% elif item.value is none %}
+<td class="num is-missing">&mdash;</td>
+{% else %}
+<td class="num value-{{ item.color }}">{{ item.value }}</td>
+{% endif %}
+{% endmacro %}
+
+{% macro stat_cell(item) %}
 <div class="stat">
   <p class="stat-label">{{ item.label }}</p>
-  {% if item.visible %}
-  <p class="stat-value stat-value-sm value-{{ item.color }}">
-    {{ item.value if item.value is not none else 'Not available' }}
-  </p>
-  {% else %}
+  {% if not item.visible %}
   <p class="stat-value stat-value-sm is-hidden-grade" aria-label="Hidden">
     <span aria-hidden="true">••••</span>
+  </p>
+  {% else %}
+  <p
+    class="stat-value stat-value-sm {{ 'is-missing' if item.value is none }}"
+  >
+    {{ item.value if item.value is not none else '—' }}
   </p>
   {% endif %}
 </div>
@@ -60,25 +74,37 @@
   <section>
     <h2 class="card-title mb-3">Overall</h2>
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {% for item in profile.overall %} {{ grade_cell(item) }} {% endfor %}
+      {% for item in profile.overall %} {{ stat_cell(item) }} {% endfor %}
     </div>
   </section>
 
   {% if profile.courses %}
   <section>
     <h2 class="card-title mb-3">Courses</h2>
-    <div class="grid gap-4 xl:grid-cols-2">
-      {% for course in profile.courses %}
-      <article class="card">
-        <div class="flex flex-wrap items-baseline justify-between gap-2">
-          <p class="text-lg font-semibold text-text">{{ course.name }}</p>
-          <span class="badge badge-muted">{{ course.code }}</span>
-        </div>
-        <div class="mt-4 grid gap-3 sm:grid-cols-2">
-          {% for item in course.fields %} {{ grade_cell(item) }} {% endfor %}
-        </div>
-      </article>
-      {% endfor %}
+    {#- viewable_profile() emits every COURSE_SHARE_FIELDS entry for every
+        course, in one fixed order, so the rows are rectangular and the header
+        can be read off any row. -#}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Course</th>
+            <th>Code</th>
+            {% for item in profile.courses[0].fields %}
+            <th class="num">{{ item.label }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for course in profile.courses %}
+          <tr>
+            <td>{{ course.name }}</td>
+            <td>{{ course.code }}</td>
+            {% for item in course.fields %}{{ grade_td(item) }}{% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </section>
   {% endif %}

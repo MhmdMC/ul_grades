@@ -65,7 +65,7 @@ block content %}
       <p class="stat-label">{{ label }}</p>
       <p
         id="{{ stat_id }}"
-        class="stat-value {{ 'stat-display' if stat_id == 'stat-average' }} {{ 'is-missing' if value is none }}"
+        class="stat-value {{ 'stat-display' if stat_id in ('stat-average', 'stat-overall-rank') }} {{ 'is-missing' if value is none }}"
       >
         {{ value if value is not none else '—' }}
       </p>
@@ -84,9 +84,10 @@ block content %}
             <th>Code</th>
             <th class="num">Cr</th>
             <th class="num">Partial</th>
-            <th class="num">Rank</th>
+            <th class="num">Partial rank</th>
             <th class="num">Final</th>
-            <th>To pass</th>
+            <th class="num">Final rank</th>
+            <th class="col-spaced">To pass</th>
           </tr>
         </thead>
         <tbody>
@@ -118,15 +119,22 @@ block content %}
             <td class="num value-{{ course.final_color }}">
               {{ course.final_value }}
             </td>
-            <td class="is-missing">&mdash;</td>
+            {% if course.final_rank is not none %}
+            <td class="num">{{ course.final_rank }}</td>
+            {% else %}
+            <td class="num is-missing">&mdash;</td>
+            {% endif %}
+            <td class="col-spaced is-missing">&mdash;</td>
             {% elif course.final_value and course.final_value != 'Not Available' %}
             <td class="num is-missing">&mdash;</td>
-            <td>{{ course.final_value }}</td>
+            <td class="num is-missing">&mdash;</td>
+            <td class="col-spaced">{{ course.final_value }}</td>
             {% else %}
             {#- grade_to_pass() returns the literal "Not Available" when the
                 partial is not numeric. app.py is not refactored in this step. -#}
             <td class="num is-missing">&mdash;</td>
-            <td class="is-missing">&mdash;</td>
+            <td class="num is-missing">&mdash;</td>
+            <td class="col-spaced is-missing">&mdash;</td>
             {% endif %}
           </tr>
           {% endfor %}

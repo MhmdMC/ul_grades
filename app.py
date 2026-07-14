@@ -1624,6 +1624,8 @@ def dashboard_context(user: User) -> dict[str, Any]:
                 "final_label": "Final grade" if final_grade is not None else "Grade to pass",
                 "final_value": final_grade if final_grade is not None else grade_to_pass(course.get("partial")),
                 "final_color": grade_color(final_grade) if final_grade is not None else "neutral",
+                # UL sends 0 instead of null for a final rank that does not exist yet.
+                "final_rank": course.get("final_rank") or None,
             }
         )
 
