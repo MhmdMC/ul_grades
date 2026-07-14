@@ -1,10 +1,17 @@
-{% extends 'base.html' %} {% block content %}
+{% extends 'base.html' %} {% set title = 'Not found - UL Grade Monitor' %} {%
+block content %}
 <div class="grid min-h-[50vh] place-items-center">
-  <div
-    class="rounded-3xl border border-white/10 bg-white/6 p-8 text-center shadow-glow"
-  >
-    <h1 class="text-3xl font-semibold">404</h1>
-    <p class="mt-2 text-slate-300">The requested page could not be found.</p>
+  <div class="card max-w-md text-center">
+    <h1 class="text-4xl font-semibold">404</h1>
+    <p class="card-subtitle">
+      The requested page could not be found, or it is not public.
+    </p>
+    <div class="mt-6 flex justify-center gap-2">
+      <a class="btn btn-primary" href="{{ url_for('index') }}">Back home</a>
+      {% if current_user.is_authenticated and not is_admin %}
+      <a class="btn" href="{{ url_for('public_directory') }}">Public pages</a>
+      {% endif %}
+    </div>
   </div>
 </div>
 {% endblock %}

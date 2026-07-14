@@ -24,13 +24,15 @@
     if (!connectionStatus) return;
     connectionStatus.textContent = text;
     connectionStatus.classList.remove(
-      "text-emerald-300",
-      "text-amber-300",
-      "text-rose-300",
+      "badge-muted",
+      "value-green",
+      "value-orange",
+      "value-red",
     );
-    if (state === "good") connectionStatus.classList.add("text-emerald-300");
-    else if (state === "warn") connectionStatus.classList.add("text-amber-300");
-    else if (state === "bad") connectionStatus.classList.add("text-rose-300");
+    if (state === "good") connectionStatus.classList.add("value-green");
+    else if (state === "warn") connectionStatus.classList.add("value-orange");
+    else if (state === "bad") connectionStatus.classList.add("value-red");
+    else connectionStatus.classList.add("badge-muted");
   }
 
   function ensureAudioUnlocked() {
@@ -108,12 +110,23 @@
     setTimeout(() => card.classList.remove("is-changed"), 4500);
   }
 
+  function setStat(id, value) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.textContent =
+      value === null || value === undefined ? "Not available" : value;
+  }
+
   function updateDashboard(payload) {
     if (!payload) return;
     if (studentName && payload.student_name)
       studentName.textContent = payload.student_name;
     if (lastUpdate && payload.updated_at)
       lastUpdate.textContent = payload.updated_at;
+    setStat("stat-average", payload.average);
+    setStat("stat-overall-rank", payload.overall_rank);
+    setStat("stat-final-average", payload.final_average);
+    setStat("stat-final-rank", payload.final_rank);
     if (payload.courses) {
       payload.courses.forEach((course) => {
         highlightCourse(course.key, "changed");

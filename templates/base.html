@@ -71,66 +71,46 @@
     <div
       class="relative mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-4 py-6 lg:px-8"
     >
+      {% macro nav_item(endpoint, label) %}
+      <a
+        class="nav-link {{ 'is-active' if request.endpoint == endpoint else '' }}"
+        href="{{ url_for(endpoint) }}"
+        >{{ label }}</a
+      >
+      {% endmacro %}
+
       <header
         class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-white/10 bg-white/5 px-5 py-4 shadow-glow backdrop-blur-xl"
       >
-        <div>
-          <div class="text-xs uppercase tracking-[0.35em] text-slate-400">
-            UL Faculty of Engineering
-          </div>
+        <a href="{{ url_for('index') }}" class="block">
+          <div class="eyebrow">UL Faculty of Engineering</div>
           <div class="mt-1 text-2xl font-semibold">UL Grade Monitor</div>
-        </div>
-        <nav class="flex flex-wrap gap-3 text-sm">
-          {% if current_user.is_authenticated %}
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('dashboard') }}"
-            >Dashboard</a
-          >
-          {% if is_admin %}
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('admin_dashboard') }}"
-            >Admin</a
-          >
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('admin_users') }}"
-            >Users</a
-          >
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('admin_groups') }}"
-            >Groups</a
-          >
-          {% endif %}
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('logout') }}"
-            >Logout</a
-          >
-          {% else %}
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('login') }}"
-            >Login</a
-          >
-          <a
-            class="rounded-full border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
-            href="{{ url_for('register') }}"
+        </a>
+        <nav class="flex flex-wrap items-center gap-1.5">
+          {% if not current_user.is_authenticated %} {{ nav_item('help_page',
+          'Help') }} {{ nav_item('login', 'Login') }}
+          <a class="btn btn-primary btn-sm" href="{{ url_for('register') }}"
             >Register</a
           >
+          {% elif is_admin %} {{ nav_item('admin_dashboard', 'Admin') }} {{
+          nav_item('admin_users', 'Users') }} {{ nav_item('admin_groups',
+          'Groups') }}
+          <span class="nav-sep"></span>
+          <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+          {% else %} {{ nav_item('dashboard', 'Dashboard') }} {{
+          nav_item('share_settings', 'Sharing') }} {{
+          nav_item('public_directory', 'Public') }}
+          <span class="nav-sep"></span>
+          <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
           {% endif %}
         </nav>
       </header>
 
       {% with messages = get_flashed_messages(with_categories=true) %} {% if
       messages %}
-      <div class="space-y-3">
+      <div class="mb-6 space-y-3">
         {% for category, message in messages %}
-        <div
-          class="rounded-2xl border px-4 py-3 shadow-glow {{ 'border-emerald-400/30 bg-emerald-400/10' if category == 'success' else 'border-rose-400/30 bg-rose-400/10' }}"
-        >
+        <div class="alert alert-{{ category if category in ['success', 'error', 'warning', 'info'] else 'info' }}">
           {{ message }}
         </div>
         {% endfor %}

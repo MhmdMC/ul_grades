@@ -1,0 +1,105 @@
+{% extends 'base.html' %} {% set title = 'Sharing - UL Grade Monitor' %} {%
+block content %}
+<form method="post" class="section-stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+  <section class="card">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div class="max-w-2xl">
+        <p class="eyebrow">Sharing</p>
+        <h1 class="mt-2 text-3xl font-semibold">Choose what to make public</h1>
+        <p class="card-subtitle">
+          Every grade, rank and average is private by default. Tick an item to
+          publish it on your public page &mdash; nothing else is ever shown.
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="badge {{ 'badge-public' if public_count else 'badge-muted' }}">
+          {{ public_count }} item{{ '' if public_count == 1 else 's' }} public
+        </span>
+        <a
+          class="btn btn-sm"
+          href="{{ url_for('public_profile_page', username=current_user.username) }}"
+          >View public page</a
+        >
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 class="card-title">Overall</h2>
+    <p class="card-subtitle">Your class-wide averages and ranks.</p>
+    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {% for row in overall_rows %}
+      <label class="toggle">
+        <span class="toggle-text">
+          <span class="toggle-label block">{{ row.label }}</span>
+          <span class="toggle-value block">
+            {{ row.value if row.value is not none else 'Not available' }}
+          </span>
+        </span>
+        <input
+          class="checkbox"
+          type="checkbox"
+          name="public"
+          value="{{ row.key }}"
+          {%
+          if
+          row.is_public
+          %}checked{%
+          endif
+          %}
+        />
+      </label>
+      {% endfor %}
+    </div>
+  </section>
+
+  {% if course_rows %} {% for course in course_rows %}
+  <section class="card">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <h2 class="card-title">{{ course.name }}</h2>
+      <span class="badge badge-muted">{{ course.code }}</span>
+    </div>
+    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {% for item in course.fields %}
+      <label class="toggle">
+        <span class="toggle-text">
+          <span class="toggle-label block">{{ item.label }}</span>
+          <span class="toggle-value block">
+            {{ item.value if item.value is not none else 'Not available' }}
+          </span>
+        </span>
+        <input
+          class="checkbox"
+          type="checkbox"
+          name="public"
+          value="{{ item.key }}"
+          {%
+          if
+          item.is_public
+          %}checked{%
+          endif
+          %}
+        />
+      </label>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %} {% else %}
+  <div class="empty-state">
+    No grades are stored yet. Once your first grades come in, every one of them
+    will show up here to share.
+  </div>
+  {% endif %}
+
+  <div
+    class="sticky bottom-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/80 px-5 py-4 shadow-glow backdrop-blur-xl"
+  >
+    <p class="text-sm text-slate-400">
+      Changes only apply after you save.
+    </p>
+    <button type="submit" class="btn btn-primary">Save sharing settings</button>
+  </div>
+</form>
+{% endblock %}

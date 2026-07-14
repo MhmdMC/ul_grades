@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -71,11 +72,27 @@ socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*", logge
 scheduler = BackgroundScheduler(daemon=True)
 
 
+class SchoolClass(db.Model):
+    """Human-readable identity of a UL class, fetched once per new class id."""
+
+    __tablename__ = "classes"
+
+    class_id = db.Column(db.String(64), primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    year = db.Column(db.Integer, nullable=True)
+    half = db.Column(db.String(32), nullable=True)
+    major = db.Column(db.String(120), nullable=True)
+    branch_number = db.Column(db.Integer, nullable=True)
+    branch_name = db.Column(db.String(255), nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Group(db.Model):
     __tablename__ = "groups"
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), unique=True, nullable=False)
+    class_id = db.Column(db.String(64), nullable=True, index=True)
     representative_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     last_json = db.Column(db.Text, nullable=True)
     last_poll = db.Column(db.DateTime, nullable=True)
@@ -109,6 +126,9 @@ class User(UserMixin, db.Model):
 
     group = relationship("Group", back_populates="users", foreign_keys=[group_id])
     ul_credential = relationship("ULCredential", uselist=False, cascade="all, delete-orphan", passive_deletes=False)
+    grades = relationship("Grade", cascade="all, delete-orphan", back_populates="user")
+    grade_average = relationship("GradeAverage", uselist=False, cascade="all, delete-orphan")
+    public_shares = relationship("PublicShare", cascade="all, delete-orphan")
 
 
 class ULCredential(db.Model):
@@ -117,6 +137,47 @@ class ULCredential(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
     username = db.Column(db.String(80), nullable=False)
     password = db.Column(db.String(255), nullable=False)
+
+
+class Grade(db.Model):
+    """One row per (user, material). The stored copy is what the UI reads, so a
+    page view never costs a UL API call - only the poller writes here."""
+
+    __tablename__ = "grades"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    material_id = db.Column(db.String(64), nullable=False)
+    partial = db.Column(db.Float, nullable=True)
+    partial_rank = db.Column(db.Integer, nullable=True)
+    final = db.Column(db.Float, nullable=True)
+    final_grade = db.Column(db.Float, nullable=True)
+    final_rank = db.Column(db.Integer, nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    user = relationship("User", back_populates="grades")
+
+    __table_args__ = (db.UniqueConstraint("user_id", "material_id", name="uq_grades_user_material"),)
+
+
+class GradeAverage(db.Model):
+    __tablename__ = "grade_averages"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
+    partial_average = db.Column(db.Float, nullable=True)
+    partial_rank = db.Column(db.Integer, nullable=True)
+    final_average = db.Column(db.Float, nullable=True)
+    final_rank = db.Column(db.Integer, nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class PublicShare(db.Model):
+    """Presence of a row means that one item is public. No row means private."""
+
+    __tablename__ = "public_shares"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
+    item_key = db.Column(db.String(120), primary_key=True)
 
 
 class Material(db.Model):
@@ -312,6 +373,10 @@ def ensure_user_name_column() -> None:
         db.session.execute(text("ALTER TABLE users ADD COLUMN ul_name VARCHAR(255)"))
     if "hostage_consent" not in columns:
         db.session.execute(text("ALTER TABLE users ADD COLUMN hostage_consent BOOLEAN NOT NULL DEFAULT 0"))
+
+    group_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(groups)"))}
+    if "class_id" not in group_columns:
+        db.session.execute(text("ALTER TABLE groups ADD COLUMN class_id VARCHAR(64)"))
     db.session.commit()
 
 
@@ -331,13 +396,120 @@ def ensure_admin_account() -> None:
     db.session.commit()
 
 
-def ensure_group_for_class(class_id: str | None) -> Group:
-    group_name = f"Class {class_id or 'unassigned'}"
-    group = Group.query.filter_by(name=group_name).first()
-    if group:
-        return group
-    group = Group(name=group_name)
-    db.session.add(group)
+ORDINAL_HALVES = {"fall": "Fall", "spring": "Spring", "summer": "Summer", "winter": "Winter"}
+
+
+def build_class_name(payload: dict[str, Any]) -> str | None:
+    """Year 2 - Spring - Major - Branch 3   (the major segment is dropped when null)."""
+    definition = payload.get("definition") if isinstance(payload.get("definition"), dict) else {}
+    branch = payload.get("branch") if isinstance(payload.get("branch"), dict) else {}
+
+    year = definition.get("year")
+    half = definition.get("half")
+    major = definition.get("major")
+    branch_number = branch.get("number")
+
+    parts: list[str] = []
+    if year is not None:
+        parts.append(f"Year {year}")
+    if half:
+        parts.append(ORDINAL_HALVES.get(str(half).lower(), str(half).title()))
+    if major:
+        parts.append(str(major))
+    if branch_number is not None:
+        parts.append(f"Branch {branch_number}")
+
+    return " - ".join(parts) if parts else None
+
+
+def ensure_class_record(class_id: str, user: User) -> SchoolClass | None:
+    """Resolve a class id to its real name. Only calls UL the first time we see the class."""
+    if not class_id:
+        return None
+
+    record = db.session.get(SchoolClass, str(class_id))
+    if record:
+        return record
+    if not user.ul_student_id or not user.ul_cookie:
+        return None
+
+    try:
+        response = ul_api.get_current_class(user.ul_student_id, user.ul_cookie)
+    except Exception as exc:
+        log_event("warning", "class_lookup_failed", f"Class lookup failed for {class_id}: {exc}", user_id=user.id)
+        return None
+
+    if response.status_code >= 400 or not isinstance(response.json_data, dict):
+        log_event(
+            "warning",
+            "class_lookup_failed",
+            f"Class lookup for {class_id} returned {response.status_code}",
+            user_id=user.id,
+            endpoint=response.endpoint,
+            http_status=response.status_code,
+        )
+        return None
+
+    payload = response.json_data
+    name = build_class_name(payload)
+    if not name:
+        return None
+
+    # Trust the id the API reports over the one we guessed from the classes list.
+    resolved_id = str(payload.get("id") or class_id)
+    record = db.session.get(SchoolClass, resolved_id)
+    if record is None:
+        record = SchoolClass(class_id=resolved_id)
+        db.session.add(record)
+
+    definition = payload.get("definition") if isinstance(payload.get("definition"), dict) else {}
+    branch = payload.get("branch") if isinstance(payload.get("branch"), dict) else {}
+    record.name = name
+    record.year = coerce_int(definition.get("year"))
+    record.half = definition.get("half")
+    record.major = definition.get("major")
+    record.branch_number = coerce_int(branch.get("number"))
+    record.branch_name = branch.get("name")
+    record.updated_at = now_utc()
+    db.session.commit()
+
+    log_event("info", "class_resolved", f"Class {resolved_id} resolved to '{name}'", user_id=user.id)
+    return record
+
+
+def class_display_name(class_id: str | None) -> str:
+    if not class_id:
+        return "Unassigned"
+    record = db.session.get(SchoolClass, str(class_id))
+    return record.name if record else f"Class {class_id}"
+
+
+def ensure_group_for_class(class_id: str | None, user: User | None = None) -> Group:
+    key = str(class_id) if class_id else None
+
+    if user is not None and key:
+        ensure_class_record(key, user)
+
+    group = Group.query.filter_by(class_id=key).first() if key else None
+    if group is None:
+        # Fall back to the legacy name-keyed lookup so pre-existing groups get adopted
+        # rather than duplicated, then backfill their class_id.
+        group = Group.query.filter_by(name=f"Class {key or 'unassigned'}").first()
+        if group is not None and key:
+            group.class_id = key
+
+    desired_name = class_display_name(key) if key else "Unassigned"
+
+    if group is None:
+        # Group.name is unique; keep the class id as a suffix if the name is taken.
+        name = desired_name
+        if Group.query.filter_by(name=name).first():
+            name = f"{desired_name} ({key})"
+        group = Group(name=name, class_id=key)
+        db.session.add(group)
+    elif group.name != desired_name and not Group.query.filter(Group.name == desired_name, Group.id != group.id).first():
+        group.name = desired_name
+
     db.session.commit()
     return group
 
@@ -575,6 +747,7 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     user.last_snapshot = json.dumps(payload, ensure_ascii=False)
     user.last_successful_poll = now_utc()
     db.session.commit()
+    persist_snapshot(user, normalize_snapshot(payload))
     return response
 
 
@@ -588,6 +761,203 @@ def grade_color(value: Any) -> str:
     if number >= 70:
         return "orange"
     return "red"
+
+
+# Every individually shareable item. Each (field, label) pair becomes one
+# checkbox on the sharing page and one possible row on the public profile.
+COURSE_SHARE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("partial", "Partial grade"),
+    ("partial_rank", "Partial rank"),
+    ("final", "Final grade"),
+    ("final_rank", "Final rank"),
+)
+OVERALL_SHARE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("partial_average", "Partial average"),
+    ("partial_rank", "Partial rank"),
+    ("final_average", "Final average"),
+    ("final_rank", "Final rank"),
+)
+
+
+def course_share_key(material_id: Any, field: str) -> str:
+    return f"course:{material_id}:{field}"
+
+
+def overall_share_key(field: str) -> str:
+    return f"overall:{field}"
+
+
+def coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def persist_snapshot(user: User, normalized: dict[str, Any]) -> None:
+    """Write a freshly fetched snapshot into the grades tables."""
+    existing = {grade.material_id: grade for grade in Grade.query.filter_by(user_id=user.id).all()}
+    seen: set[str] = set()
+
+    for course in normalized.get("courses", []):
+        material_id = str(course.get("key") or "").strip()
+        if not material_id:
+            continue
+        seen.add(material_id)
+        grade = existing.get(material_id)
+        if grade is None:
+            grade = Grade(user_id=user.id, material_id=material_id)
+            db.session.add(grade)
+        grade.partial = coerce_float(course.get("partial"))
+        grade.partial_rank = coerce_int(course.get("partial_rank"))
+        grade.final = coerce_float(course.get("final"))
+        grade.final_grade = coerce_float(course.get("finalGrade"))
+        grade.final_rank = coerce_int(course.get("final_rank"))
+        grade.updated_at = now_utc()
+
+    for material_id, grade in existing.items():
+        if material_id not in seen:
+            db.session.delete(grade)
+
+    average = GradeAverage.query.filter_by(user_id=user.id).first()
+    if average is None:
+        average = GradeAverage(user_id=user.id)
+        db.session.add(average)
+    average.partial_average = coerce_float(normalized.get("average"))
+    average.partial_rank = coerce_int(normalized.get("overall_rank"))
+    average.final_average = coerce_float(normalized.get("final_average"))
+    average.final_rank = coerce_int(normalized.get("final_rank"))
+    average.updated_at = now_utc()
+
+    db.session.commit()
+
+
+def stored_snapshot(user: User) -> dict[str, Any] | None:
+    """Rebuild a normalized snapshot from the database. Never calls the UL API."""
+    grades = Grade.query.filter_by(user_id=user.id).order_by(Grade.material_id.asc()).all()
+    if not grades:
+        return None
+
+    average = GradeAverage.query.filter_by(user_id=user.id).first()
+    courses: list[dict[str, Any]] = []
+    for grade in grades:
+        lookup = material_lookup(grade.material_id)
+        courses.append(
+            {
+                "key": grade.material_id,
+                "course_code": lookup["code"],
+                "course_name": lookup["name"],
+                "credits": lookup["credits"],
+                "partial": grade.partial,
+                "partial_rank": grade.partial_rank,
+                "final": grade.final,
+                "final_rank": grade.final_rank,
+                "finalGrade": grade.final_grade,
+            }
+        )
+
+    return {
+        "student_name": user.ul_name,
+        "student_id": user.ul_student_id,
+        "class_id": user.ul_class_id,
+        "average": average.partial_average if average else None,
+        "overall_rank": average.partial_rank if average else None,
+        "final_average": average.final_average if average else None,
+        "final_rank": average.final_rank if average else None,
+        "courses": courses,
+        "updated_at": max((grade.updated_at for grade in grades), default=None),
+        "raw": None,
+    }
+
+
+def public_keys_for(user: User) -> set[str]:
+    return {row.item_key for row in PublicShare.query.filter_by(user_id=user.id).all()}
+
+
+def allowed_share_keys(user: User) -> set[str]:
+    """The keys this user is actually allowed to publish, derived from their own grades."""
+    keys = {overall_share_key(field) for field, _ in OVERALL_SHARE_FIELDS}
+    normalized = stored_snapshot(user) or {}
+    for course in normalized.get("courses", []):
+        for field, _ in COURSE_SHARE_FIELDS:
+            keys.add(course_share_key(course["key"], field))
+    return keys
+
+
+def set_public_keys(user: User, keys: set[str]) -> None:
+    current = {row.item_key: row for row in PublicShare.query.filter_by(user_id=user.id).all()}
+    for key in keys - set(current):
+        db.session.add(PublicShare(user_id=user.id, item_key=key))
+    for key in set(current) - keys:
+        db.session.delete(current[key])
+    db.session.commit()
+
+
+def course_field_values(course: dict[str, Any]) -> dict[str, Any]:
+    final_grade = course.get("finalGrade") if course.get("finalGrade") is not None else course.get("final")
+    return {
+        "partial": course.get("partial"),
+        "partial_rank": course.get("partial_rank"),
+        "final": final_grade,
+        "final_rank": course.get("final_rank"),
+    }
+
+
+def overall_field_values(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "partial_average": snapshot.get("average"),
+        "partial_rank": snapshot.get("overall_rank"),
+        "final_average": snapshot.get("final_average"),
+        "final_rank": snapshot.get("final_rank"),
+    }
+
+
+def public_profile(user: User) -> dict[str, Any] | None:
+    """Only the items this user explicitly marked public. Returns None if nothing is shared."""
+    keys = public_keys_for(user)
+    normalized = stored_snapshot(user)
+    if not keys or normalized is None:
+        return None
+
+    values = overall_field_values(normalized)
+    overall = [
+        {"label": label, "value": values.get(field), "field": field}
+        for field, label in OVERALL_SHARE_FIELDS
+        if overall_share_key(field) in keys
+    ]
+
+    courses: list[dict[str, Any]] = []
+    for course in normalized.get("courses", []):
+        course_values = course_field_values(course)
+        # "fields" and not "items": Jinja resolves course.items to dict.items first.
+        fields = [
+            {
+                "label": label,
+                "value": course_values.get(field),
+                "color": grade_color(course_values.get(field)) if field in ("partial", "final") else "neutral",
+            }
+            for field, label in COURSE_SHARE_FIELDS
+            if course_share_key(course["key"], field) in keys
+        ]
+        if fields:
+            courses.append({"code": course.get("course_code"), "name": course.get("course_name"), "fields": fields})
+
+    if not overall and not courses:
+        return None
+
+    return {
+        "user": user,
+        "overall": overall,
+        "courses": courses,
+        "updated_at": normalized.get("updated_at"),
+    }
 
 
 def api_request(user: User) -> ULAPIResponse:
@@ -683,8 +1053,9 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
         raise ULIdentityBootstrapError("UL classes response did not include any classes.")
 
     previous_group = user.group
-    group = ensure_group_for_class(latest_class_id)
+    # Set the student id first: resolving the class name is a per-student UL call.
     user.ul_student_id = student_username
+    group = ensure_group_for_class(latest_class_id, user)
     if student_name:
         user.ul_name = student_name
     user.ul_class_id = latest_class_id
@@ -856,6 +1227,7 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
     user.last_successful_poll = now_utc()
     user.last_request_result = "ok"
     db.session.commit()
+    persist_snapshot(user, snapshot)
 
     log_event(
         "info",
@@ -1024,8 +1396,14 @@ def is_admin_user() -> bool:
 
 def dashboard_context(user: User) -> dict[str, Any]:
     group = user.group or (ensure_group_for_class(user.ul_class_id) if user.ul_class_id else None)
-    snapshot = json.loads(user.last_snapshot) if user.last_snapshot else {"grades": []}
-    normalized = normalize_snapshot(snapshot)
+
+    # Read the stored copy. Falling back to last_snapshot only matters for a user
+    # whose grades were fetched before the grades tables existed.
+    normalized = stored_snapshot(user)
+    if normalized is None:
+        raw = json.loads(user.last_snapshot) if user.last_snapshot else {"grades": []}
+        normalized = normalize_snapshot(raw)
+
     courses = []
     for course in normalized.get("courses", []):
         material = material_lookup(course.get("key") or course.get("course_code") or "")
@@ -1047,7 +1425,12 @@ def dashboard_context(user: User) -> dict[str, Any]:
 
 
 def ensure_dashboard_snapshot(user: User) -> None:
+    """Fetch from UL only when we have nothing stored yet. Once grades are in the
+    database, the poller is the only thing that refreshes them - viewing a page
+    never costs a UL API call."""
     if not user.ul_cookie:
+        return
+    if Grade.query.filter_by(user_id=user.id).first():
         return
     if user.last_snapshot:
         return
@@ -1057,6 +1440,46 @@ def ensure_dashboard_snapshot(user: User) -> None:
         except ULIdentityBootstrapError:
             return
     fetch_and_compare_user(user)
+
+
+def student_only(view):
+    """Admins are staff, not students: they have no cookie, grades, or public page."""
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if is_admin_user():
+            return redirect(url_for("admin_dashboard"))
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
+def backfill_stored_grades() -> None:
+    """One-time move of pre-existing last_snapshot JSON into the grades tables."""
+    users = User.query.filter(User.last_snapshot.isnot(None)).all()
+    for user in users:
+        if Grade.query.filter_by(user_id=user.id).first():
+            continue
+        try:
+            payload = json.loads(user.last_snapshot)
+        except (TypeError, ValueError):
+            continue
+        persist_snapshot(user, normalize_snapshot(payload))
+
+
+def backfill_class_names() -> None:
+    """Resolve names for classes that predate the classes table. One UL call per
+    unknown class, then never again."""
+    users = User.query.filter(User.ul_class_id.isnot(None), User.ul_cookie.isnot(None)).all()
+    resolved: set[str] = set()
+    for user in users:
+        class_id = str(user.ul_class_id)
+        if class_id in resolved or db.session.get(SchoolClass, class_id):
+            continue
+        record = ensure_class_record(class_id, user)
+        if record:
+            resolved.add(record.class_id)
+            ensure_group_for_class(class_id)
 
 
 @login_manager.user_loader
@@ -1083,11 +1506,13 @@ def inject_globals() -> dict[str, Any]:
 
 @app.route("/")
 def index():
-    if current_user.is_authenticated:
-        if not current_user.ul_cookie:
-            return redirect(url_for("update_cookie"))
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    if not current_user.is_authenticated:
+        return redirect(url_for("login"))
+    if is_admin_user():
+        return redirect(url_for("admin_dashboard"))
+    if not current_user.ul_cookie:
+        return redirect(url_for("update_cookie"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -1173,6 +1598,7 @@ def logout():
 
 @app.route("/cookie", methods=["GET", "POST"])
 @login_required
+@student_only
 def update_cookie():
     cookie_form = CookieForm()
     credentials_form = ULCredentialsForm()
@@ -1207,6 +1633,7 @@ def help_page():
 
 @app.route("/dashboard")
 @login_required
+@student_only
 def dashboard():
     if not current_user.ul_cookie:
         return redirect(url_for("update_cookie"))
@@ -1224,6 +1651,7 @@ def dashboard():
 
 @app.route("/consent", methods=["POST"])
 @login_required
+@student_only
 def update_consent():
     form = ConsentForm()
     if form.validate_on_submit():
@@ -1233,8 +1661,109 @@ def update_consent():
     return redirect(url_for("dashboard"))
 
 
+@app.route("/share", methods=["GET", "POST"])
+@login_required
+@student_only
+def share_settings():
+    if request.method == "POST":
+        requested = set(request.form.getlist("public"))
+        set_public_keys(current_user, requested & allowed_share_keys(current_user))
+        flash("Sharing preferences saved.", "success")
+        return redirect(url_for("share_settings"))
+
+    ensure_dashboard_snapshot(current_user)
+    snapshot = stored_snapshot(current_user) or {"courses": []}
+    keys = public_keys_for(current_user)
+
+    overall_values = overall_field_values(snapshot)
+    overall_rows = [
+        {
+            "key": overall_share_key(field),
+            "label": label,
+            "value": overall_values.get(field),
+            "is_public": overall_share_key(field) in keys,
+        }
+        for field, label in OVERALL_SHARE_FIELDS
+    ]
+
+    course_rows = []
+    for course in snapshot.get("courses", []):
+        values = course_field_values(course)
+        course_rows.append(
+            {
+                "code": course.get("course_code"),
+                "name": course.get("course_name"),
+                "fields": [
+                    {
+                        "key": course_share_key(course["key"], field),
+                        "label": label,
+                        "value": values.get(field),
+                        "is_public": course_share_key(course["key"], field) in keys,
+                    }
+                    for field, label in COURSE_SHARE_FIELDS
+                ],
+            }
+        )
+
+    return render_template(
+        "share.html",
+        overall_rows=overall_rows,
+        course_rows=course_rows,
+        public_count=len(keys),
+    )
+
+
+@app.route("/public")
+@login_required
+def public_directory():
+    shared_user_ids = {row.user_id for row in PublicShare.query.all()}
+    if not shared_user_ids:
+        return render_template("public/directory.html", classes=[])
+
+    users = User.query.filter(User.id.in_(shared_user_ids)).order_by(User.username.asc()).all()
+
+    # Bucket every sharing student under the class they belong to.
+    buckets: dict[str | None, list[dict[str, Any]]] = {}
+    for user in users:
+        profile = public_profile(user)
+        if not profile:
+            continue
+        buckets.setdefault(user.ul_class_id, []).append(
+            {
+                "user": user,
+                "course_count": len(profile["courses"]),
+                "overall_count": len(profile["overall"]),
+            }
+        )
+
+    classes = [
+        {
+            "class_id": class_id,
+            "name": class_display_name(class_id),
+            "students": sorted(entries, key=lambda entry: entry["user"].username.lower()),
+        }
+        for class_id, entries in buckets.items()
+    ]
+    classes.sort(key=lambda item: item["name"])
+    return render_template("public/directory.html", classes=classes)
+
+
+@app.route("/u/<username>")
+@login_required
+def public_profile_page(username: str):
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        abort(404)
+    profile = public_profile(user)
+    if not profile:
+        abort(404)
+    profile["class_name"] = class_display_name(user.ul_class_id)
+    return render_template("public/profile.html", profile=profile)
+
+
 @app.route("/api/dashboard")
 @login_required
+@student_only
 def dashboard_api():
     if not current_user.ul_student_id or not current_user.ul_class_id:
         try:
@@ -1550,6 +2079,8 @@ with app.app_context():
     ensure_user_name_column()
     bootstrap_materials()
     ensure_admin_account()
+    backfill_stored_grades()
+    backfill_class_names()
     start_background_services()
 
 

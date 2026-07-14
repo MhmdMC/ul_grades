@@ -1,119 +1,132 @@
-{% extends 'base.html' %}
-{% set title = 'Admin Users - UL Grade Monitor' %}
-{% block content %}
-<div class="space-y-6">
-  <section class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <div class="flex flex-wrap items-center justify-between gap-4">
+{% extends 'base.html' %} {% set title = 'Admin Users - UL Grade Monitor' %} {%
+block content %}
+<div class="section-stack">
+  <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h1 class="text-3xl font-semibold">Users</h1>
-        <p class="text-sm text-slate-400">
+        <p class="eyebrow">Admin</p>
+        <h1 class="mt-2 text-3xl font-semibold">Users</h1>
+        <p class="card-subtitle">
           Search, sort, copy data, reset cookies, and move users between groups.
         </p>
       </div>
-      <form method="get" class="flex flex-wrap gap-3">
+      <form method="get" class="flex flex-wrap items-center gap-2">
         <input
           name="q"
           value="{{ search }}"
           placeholder="Search users"
-          class="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none"
+          class="input w-56"
         />
-        <select name="sort" class="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none">
+        <select name="sort" class="select w-40">
           <option value="created_at" {% if sort == "created_at" %}selected{% endif %}>Created</option>
           <option value="username" {% if sort == "username" %}selected{% endif %}>Username</option>
           <option value="student_id" {% if sort == "student_id" %}selected{% endif %}>Student ID</option>
           <option value="class_id" {% if sort == "class_id" %}selected{% endif %}>Class ID</option>
         </select>
-        <button class="rounded-2xl bg-cyan-400 px-4 py-3 font-semibold text-slate-950">
-          Filter
-        </button>
+        <button class="btn btn-primary">Filter</button>
       </form>
     </div>
   </section>
 
-  <section class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <h2 class="text-2xl font-semibold">Create user</h2>
-    <form method="post" action="{{ url_for('admin_create_user') }}" class="mt-4 grid gap-4 md:grid-cols-2">
+  <section class="card">
+    <h2 class="card-title">Create user</h2>
+    <form
+      method="post"
+      action="{{ url_for('admin_create_user') }}"
+      class="mt-5 grid gap-4 md:grid-cols-2"
+    >
       {{ create_form.hidden_tag() }}
       <div class="md:col-span-2">
-        {{ create_form.ul_cookie(class='min-h-28 w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3') }}
+        {{ create_form.ul_cookie.label(class='field-label') }} {{
+        create_form.ul_cookie(class='textarea') }}
       </div>
       <div>
-        {{ create_form.username(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3') }}
+        {{ create_form.username.label(class='field-label') }} {{
+        create_form.username(class='input') }}
       </div>
       <div>
-        {{ create_form.password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3') }}
+        {{ create_form.password.label(class='field-label') }} {{
+        create_form.password(class='input') }}
       </div>
       <div class="md:col-span-2">
-        {{ create_form.submit(class='rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 font-semibold text-slate-950') }}
+        {{ create_form.submit(class='btn btn-primary') }}
       </div>
     </form>
   </section>
 
-  <section class="overflow-hidden rounded-3xl border border-white/10 bg-white/6 shadow-glow">
-    <div class="overflow-x-auto">
-      <table class="min-w-full text-left text-sm">
-        <thead class="bg-white/5 text-slate-300">
-          <tr>
-            <th class="px-4 py-3">Website username</th>
-            <th class="px-4 py-3">UL student id</th>
-            <th class="px-4 py-3">Class id</th>
-            <th class="px-4 py-3">Monitoring group</th>
-            <th class="px-4 py-3">UL cookie</th>
-            <th class="px-4 py-3">Hostage consent</th>
-            <th class="px-4 py-3">Last successful request</th>
-            <th class="px-4 py-3">Last request result</th>
-            <th class="px-4 py-3">Created date</th>
-            <th class="px-4 py-3">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for user in users %}
-          <tr class="border-t border-white/10">
-            <td class="px-4 py-4">{{ user.username }}</td>
-            <td class="px-4 py-4">{{ user.ul_student_id or 'Not available' }}</td>
-            <td class="px-4 py-4">{{ user.ul_class_id or 'Not available' }}</td>
-            <td class="px-4 py-4">{{ user.group.name if user.group else 'Not available' }}</td>
-            <td class="px-4 py-4 max-w-[280px] truncate">
-              <div class="flex items-center gap-2">
-                <span class="min-w-0 flex-1 truncate">{{ user.ul_cookie or 'Not available' }}</span>
-                {% if user.ul_cookie %}
-                <button
-                  type="button"
-                  class="copy-cookie-button rounded-lg border border-white/10 px-3 py-1 text-xs font-semibold text-cyan-100 hover:bg-white/10"
-                  data-cookie-value="{{ user.ul_cookie }}"
-                >
-                  Copy
-                </button>
-                {% endif %}
-              </div>
-            </td>
-            <td class="px-4 py-4">{{ 'Yes' if user.hostage_consent else 'No' }}</td>
-            <td class="px-4 py-4">{{ user.last_successful_poll if user.last_successful_poll else 'Not available' }}</td>
-            <td class="px-4 py-4">{{ user.last_request_result or 'Not available' }}</td>
-            <td class="px-4 py-4">{{ user.created_at }}</td>
-            <td class="px-4 py-4 space-y-2">
+  <section class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Website username</th>
+          <th>UL student id</th>
+          <th>Class id</th>
+          <th>Monitoring group</th>
+          <th>UL cookie</th>
+          <th>Hostage consent</th>
+          <th>Last successful request</th>
+          <th>Last request result</th>
+          <th>Created date</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td class="font-semibold">{{ user.username }}</td>
+          <td>{{ user.ul_student_id or 'Not available' }}</td>
+          <td>{{ user.ul_class_id or 'Not available' }}</td>
+          <td>{{ user.group.name if user.group else 'Not available' }}</td>
+          <td class="max-w-[240px]">
+            <div class="flex items-center gap-2">
+              <span class="min-w-0 flex-1 truncate text-slate-400">
+                {{ user.ul_cookie or 'Not available' }}
+              </span>
+              {% if user.ul_cookie %}
+              <button
+                type="button"
+                class="copy-cookie-button btn btn-sm"
+                data-cookie-value="{{ user.ul_cookie }}"
+              >
+                Copy
+              </button>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            <span class="badge {{ 'badge-public' if user.hostage_consent else 'badge-muted' }}">
+              {{ 'Yes' if user.hostage_consent else 'No' }}
+            </span>
+          </td>
+          <td>
+            {{ user.last_successful_poll if user.last_successful_poll else 'Not
+            available' }}
+          </td>
+          <td>{{ user.last_request_result or 'Not available' }}</td>
+          <td>{{ user.created_at }}</td>
+          <td>
+            <div class="flex flex-col gap-2">
               {% if user.hostage_consent %}
               <a
+                class="btn btn-sm"
                 href="{{ url_for('admin_view_dashboard', user_id=user.id) }}"
-                class="block rounded-xl border border-cyan-400/30 px-3 py-2 text-center text-cyan-100 hover:bg-cyan-400/10"
+                >View dashboard</a
               >
-                View dashboard
-              </a>
               {% endif %}
               <form method="post" action="{{ url_for('admin_reset_cookie', user_id=user.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button class="rounded-xl border border-white/10 px-3 py-2">Reset UL cookie</button>
+                <button class="btn btn-sm btn-block">Reset UL cookie</button>
               </form>
               <form method="post" action="{{ url_for('admin_delete_user', user_id=user.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button class="rounded-xl border border-rose-400/30 px-3 py-2 text-rose-200">Delete account</button>
+                <button class="btn btn-sm btn-danger btn-block">Delete</button>
               </form>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </section>
 </div>
 {% endblock %}

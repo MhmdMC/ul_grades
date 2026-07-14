@@ -1,76 +1,85 @@
 {% extends 'base.html' %} {% set title = 'Register - UL Grade Monitor' %} {%
 block content %}
-<div class="grid min-h-[calc(100vh-12rem)] place-items-center py-10">
-  <div
-    class="w-full max-w-2xl rounded-[2rem] border border-white/10 bg-white/6 p-8 shadow-glow backdrop-blur-xl"
-  >
-    <div class="mb-6">
-      <p class="text-sm uppercase tracking-[0.35em] text-slate-400">
-        Create account
-      </p>
-      <h1 class="mt-2 text-3xl font-semibold">
-        Set up your monitoring profile
-      </h1>
-    </div>
+<div class="mx-auto max-w-4xl py-8">
+  <div class="card backdrop-blur-xl">
+    <p class="eyebrow">Create account</p>
+    <h1 class="mt-2 text-3xl font-semibold">Set up your monitoring profile</h1>
+    <p class="card-subtitle">
+      Pick either method &mdash; signing in with your UL login lets the monitor
+      renew its own cookie automatically.
+    </p>
 
-    <div class="flex flex-col md:flex-row gap-8">
-      <!-- Credentials Form -->
-      <form method="post" class="flex-1 space-y-4">
+    <div class="mt-8 grid gap-8 md:grid-cols-2">
+      <form method="post" class="space-y-4">
         {{ credentials_form.hidden_tag() }}
-        <h2 class="text-lg font-medium text-white">Register with UL Login</h2>
+        <h2 class="card-title">Register with UL login</h2>
+
         <div>
-          <label class="mb-2 block text-sm text-slate-300">Username (for this site)</label>
-          {{ credentials_form.username(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">Username (for this site)</label>
+          {{ credentials_form.username(class='input') }}
         </div>
         <div>
-          <label class="mb-2 block text-sm text-slate-300">Password (for this site)</label>
-          {{ credentials_form.password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">Password (for this site)</label>
+          {{ credentials_form.password(class='input') }}
         </div>
         <div>
-          <label class="mb-2 block text-sm text-slate-300">UL Username</label>
-          {{ credentials_form.ul_username(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">UL username</label>
+          {{ credentials_form.ul_username(class='input') }}
         </div>
         <div>
-          <label class="mb-2 block text-sm text-slate-300">UL Password</label>
-          {{ credentials_form.ul_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">UL password</label>
+          {{ credentials_form.ul_password(class='input') }}
         </div>
-        <label class="flex items-start gap-2 text-xs text-slate-400">
-          {{ credentials_form.hostage_consent(class='mt-0.5') }}
-          <span>{{ credentials_form.hostage_consent.label.text }}</span>
+
+        <label class="check-row items-start">
+          {{ credentials_form.hostage_consent(class='checkbox mt-0.5') }}
+          <span class="text-xs text-slate-400">
+            {{ credentials_form.hostage_consent.label.text }}
+          </span>
         </label>
-        {{ credentials_form.submit(class='w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 font-semibold text-slate-950 transition hover:scale-[1.01]') }}
+        {{ credentials_form.submit(class='btn btn-primary btn-block') }}
       </form>
 
-      <!-- Separator -->
-      <div class="hidden md:flex items-center">
-        <div class="h-full w-px bg-white/10"></div>
-      </div>
-      <div class="md:hidden w-full h-px bg-white/10"></div>
-
-      <!-- Cookie Form -->
-      <form method="post" class="flex-1 space-y-4">
+      <form method="post" class="space-y-4 md:border-l md:border-white/10 md:pl-8">
         {{ cookie_form.hidden_tag() }}
-        <h2 class="text-lg font-medium text-white">Register with Cookie</h2>
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="card-title">Register with cookie</h2>
+          <a
+            class="text-xs text-cyan-300 hover:text-cyan-200"
+            href="{{ url_for('help_page') }}"
+            >How to find it?</a
+          >
+        </div>
+
         <div>
-          <label class="mb-2 block text-sm text-slate-300">Username (for this site)</label>
-          {{ cookie_form.username(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">Username (for this site)</label>
+          {{ cookie_form.username(class='input') }}
         </div>
         <div>
-          <label class="mb-2 block text-sm text-slate-300">Password (for this site)</label>
-          {{ cookie_form.password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">Password (for this site)</label>
+          {{ cookie_form.password(class='input') }}
         </div>
         <div>
-          <label class="mb-2 block text-sm text-slate-300">UL Cookie</label>
-          {{ cookie_form.ul_cookie(class='min-h-[6rem] w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
+          <label class="field-label">UL cookie</label>
+          {{ cookie_form.ul_cookie(class='textarea') }}
         </div>
-        <a href="{{ url_for('help_page') }}" class="text-xs text-cyan-400 hover:text-cyan-300">How to find it?</a>
-        <label class="flex items-start gap-2 text-xs text-slate-400">
-          {{ cookie_form.hostage_consent(class='mt-0.5') }}
-          <span>{{ cookie_form.hostage_consent.label.text }}</span>
+
+        <label class="check-row items-start">
+          {{ cookie_form.hostage_consent(class='checkbox mt-0.5') }}
+          <span class="text-xs text-slate-400">
+            {{ cookie_form.hostage_consent.label.text }}
+          </span>
         </label>
-        {{ cookie_form.submit(class='w-full rounded-2xl bg-gradient-to-r from-amber-300 to-orange-400 px-5 py-3 font-semibold text-slate-950 transition hover:scale-[1.01]') }}
+        {{ cookie_form.submit(class='btn btn-warn btn-block') }}
       </form>
     </div>
+
+    <p class="card-subtitle mt-8 text-center">
+      Already registered?
+      <a class="text-cyan-300 hover:text-cyan-200" href="{{ url_for('login') }}"
+        >Sign in</a
+      >
+    </p>
   </div>
 </div>
 {% endblock %}

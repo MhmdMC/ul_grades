@@ -1,101 +1,96 @@
 {% extends 'base.html' %} {% set title = 'Admin Dashboard - UL Grade Monitor' %}
 {% block content %}
-<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <p class="text-sm text-slate-400">Total users</p>
-    <p class="mt-2 text-3xl font-semibold">{{ total_users }}</p>
-  </div>
-  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <p class="text-sm text-slate-400">Online users</p>
-    <p class="mt-2 text-3xl font-semibold">{{ online_users }}</p>
-  </div>
-  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <p class="text-sm text-slate-400">Groups</p>
-    <p class="mt-2 text-3xl font-semibold">{{ groups }}</p>
-  </div>
-  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <p class="text-sm text-slate-400">Requests per minute</p>
-    <p class="mt-2 text-3xl font-semibold">{{ rpm }}</p>
-  </div>
-</div>
-<div class="mt-6 grid gap-4 xl:grid-cols-2">
-  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <p class="text-sm text-slate-400">Last polling time</p>
-    <p class="mt-2 text-lg font-semibold">
-      {{ last_poll if last_poll else 'Not available' }}
+<div class="section-stack">
+  <section class="card">
+    <p class="eyebrow">Admin</p>
+    <h1 class="mt-2 text-3xl font-semibold">Overview</h1>
+    <p class="card-subtitle">Live monitoring health across every group.</p>
+  </section>
+
+  <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    {% for label, value in [ ('Total users', total_users), ('Online users',
+    online_users), ('Groups', groups), ('Requests per minute', rpm) ] %}
+    <div class="stat">
+      <p class="stat-label">{{ label }}</p>
+      <p class="stat-value">{{ value }}</p>
+    </div>
+    {% endfor %}
+  </section>
+
+  <section class="grid gap-3 sm:grid-cols-2">
+    <div class="stat">
+      <p class="stat-label">Last polling time</p>
+      <p class="stat-value stat-value-sm">
+        {{ last_poll if last_poll else 'Not available' }}
+      </p>
+    </div>
+    <div class="stat">
+      <p class="stat-label">Average polling duration</p>
+      <p class="stat-value stat-value-sm">{{ '%.2f'|format(avg_poll) }}s</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="max-w-xl">
+        <p class="eyebrow">Maintenance</p>
+        <h2 class="card-title mt-2">Reset cached class IDs</h2>
+        <p class="card-subtitle">
+          Clears every stored UL class ID and pauses monitoring so the next login
+          has to rebuild the class from the cookie.
+        </p>
+      </div>
+      <form method="post" action="{{ url_for('admin_reset_class_cache') }}">
+        {{ reset_class_cache_form.hidden_tag() }} {{
+        reset_class_cache_form.submit(class='btn btn-warn') }}
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="max-w-xl">
+        <p class="eyebrow">Sound test</p>
+        <h2 class="card-title mt-2">Play grade-change alarm</h2>
+        <p class="card-subtitle">
+          Runs the same alert sound the dashboard uses when a grade changes.
+        </p>
+      </div>
+      <button id="test-grade-sound" type="button" class="btn">
+        Test sound
+      </button>
+    </div>
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">Security</p>
+    <h2 class="card-title mt-2">Change admin password</h2>
+    <p class="card-subtitle">
+      Your password is only ever stored hashed in the database, never in the
+      codebase.
     </p>
-  </div>
-  <div class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <p class="text-sm text-slate-400">Average polling duration</p>
-    <p class="mt-2 text-lg font-semibold">{{ '%.2f'|format(avg_poll) }}s</p>
-  </div>
-</div>
-<section
-  class="mt-6 rounded-3xl border border-amber-400/20 bg-amber-400/10 p-6 shadow-glow"
->
-  <div class="flex flex-wrap items-end justify-between gap-4">
-    <div>
-      <p class="text-sm uppercase tracking-[0.3em] text-amber-100/70">
-        Maintenance
-      </p>
-      <h2 class="mt-2 text-2xl font-semibold">Reset cached class IDs</h2>
-      <p class="mt-2 text-sm text-amber-50/80">
-        Clears every stored UL class ID and pauses monitoring so the next login
-        has to rebuild the class from the cookie.
-      </p>
-    </div>
-    <form method="post" action="{{ url_for('admin_reset_class_cache') }}">
-      {{ reset_class_cache_form.hidden_tag() }} {{
-      reset_class_cache_form.submit(class='rounded-2xl bg-amber-300 px-5 py-3
-      font-semibold text-slate-950') }}
-    </form>
-  </div>
-</section>
-<section
-  class="mt-6 rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-6 shadow-glow"
->
-  <div class="flex flex-wrap items-end justify-between gap-4">
-    <div>
-      <p class="text-sm uppercase tracking-[0.3em] text-cyan-100/70">
-        Sound test
-      </p>
-      <h2 class="mt-2 text-2xl font-semibold">Play grade-change alarm</h2>
-      <p class="mt-2 text-sm text-cyan-50/80">
-        Runs the same alert sound the dashboard uses when a grade changes.
-      </p>
-    </div>
-    <button
-      id="test-grade-sound"
-      type="button"
-      class="rounded-2xl bg-cyan-300 px-5 py-3 font-semibold text-slate-950"
+    <form
+      method="post"
+      action="{{ url_for('admin_change_password') }}"
+      class="mt-5 grid gap-4 md:grid-cols-3"
     >
-      Test sound
-    </button>
-  </div>
-</section>
-<section class="mt-6 rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-  <p class="text-sm uppercase tracking-[0.3em] text-slate-400">Security</p>
-  <h2 class="mt-2 text-2xl font-semibold">Change admin password</h2>
-  <p class="mt-2 text-sm text-slate-400">
-    Your password is only ever stored hashed in the database, never in the codebase.
-  </p>
-  <form method="post" action="{{ url_for('admin_change_password') }}" class="mt-4 grid gap-4 md:grid-cols-3">
-    {{ change_password_form.hidden_tag() }}
-    <div>
-      {{ change_password_form.current_password.label(class='mb-2 block text-sm text-slate-300') }}
-      {{ change_password_form.current_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none') }}
-    </div>
-    <div>
-      {{ change_password_form.new_password.label(class='mb-2 block text-sm text-slate-300') }}
-      {{ change_password_form.new_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none') }}
-    </div>
-    <div>
-      {{ change_password_form.confirm_password.label(class='mb-2 block text-sm text-slate-300') }}
-      {{ change_password_form.confirm_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none') }}
-    </div>
-    <div class="md:col-span-3">
-      {{ change_password_form.submit(class='rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 font-semibold text-slate-950') }}
-    </div>
-  </form>
-</section>
+      {{ change_password_form.hidden_tag() }}
+      <div>
+        {{ change_password_form.current_password.label(class='field-label') }} {{
+        change_password_form.current_password(class='input') }}
+      </div>
+      <div>
+        {{ change_password_form.new_password.label(class='field-label') }} {{
+        change_password_form.new_password(class='input') }}
+      </div>
+      <div>
+        {{ change_password_form.confirm_password.label(class='field-label') }} {{
+        change_password_form.confirm_password(class='input') }}
+      </div>
+      <div class="md:col-span-3">
+        {{ change_password_form.submit(class='btn btn-primary') }}
+      </div>
+    </form>
+  </section>
+</div>
 {% endblock %}

@@ -45,10 +45,11 @@ class ULAPIClient:
     def __init__(self, base_url: str = UL_BASE_URL) -> None:
         self.base_url = base_url.rstrip("/")
 
-    def _request(self, endpoint: str, cookie_value: str) -> ULAPIResponse:
+    def _request(self, endpoint: str, cookie_value: str, *, method: str = "GET") -> ULAPIResponse:
         url = f"{self.base_url}{endpoint}"
         started = perf_counter()
-        response = requests.get(
+        response = requests.request(
+            method,
             url,
             headers=DEFAULT_HEADERS,
             cookies={UL_COOKIE_NAME: cookie_value},
@@ -82,8 +83,15 @@ class ULAPIClient:
     def grades_endpoint(self, student_id: str, class_id: str) -> str:
         return f"{UL_API_PREFIX}/students/{student_id}/classes/{class_id}/grades"
 
+    def current_class_endpoint(self, student_username: str) -> str:
+        return f"{UL_API_PREFIX}/students/{student_username}/current-class"
+
     def get_me(self, cookie_value: str) -> ULAPIResponse:
         return self._request(self.me_endpoint(), cookie_value)
+
+    def get_current_class(self, student_username: str, cookie_value: str) -> ULAPIResponse:
+        # UL exposes this one as a POST even though it only reads.
+        return self._request(self.current_class_endpoint(student_username), cookie_value, method="POST")
 
     def login_with_credentials(self, username: str, password: str) -> str:
         url = f"{self.base_url}{self.login_endpoint()}"

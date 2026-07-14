@@ -1,0 +1,64 @@
+{% extends 'base.html' %} {% set title = 'Public grades - UL Grade Monitor' %} {%
+block content %}
+<div class="section-stack">
+  <section class="card">
+    <p class="eyebrow">Public</p>
+    <h1 class="mt-2 text-3xl font-semibold">Shared grades by class</h1>
+    <p class="card-subtitle">
+      Open a class to see the students who published part of their results.
+      Everything not explicitly shared stays private.
+    </p>
+  </section>
+
+  {% if classes %}
+  <div class="section-stack">
+    {% for school_class in classes %}
+    <details class="card" {% if classes | length == 1 %}open{% endif %}>
+      <summary
+        class="flex cursor-pointer flex-wrap items-center justify-between gap-3 list-none"
+      >
+        <div>
+          <h2 class="card-title">{{ school_class.name }}</h2>
+          <p class="card-subtitle">
+            {{ school_class.students | length }} student{{ '' if
+            school_class.students | length == 1 else 's' }} sharing
+          </p>
+        </div>
+        <span class="badge badge-public">
+          <span class="details-chevron">&#9662;</span> Students
+        </span>
+      </summary>
+
+      <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {% for entry in school_class.students %}
+        <a
+          class="stat block transition hover:border-white/25"
+          href="{{ url_for('public_profile_page', username=entry.user.username) }}"
+        >
+          <p class="font-semibold">
+            {{ entry.user.ul_name or entry.user.username }}
+          </p>
+          <p class="stat-label">@{{ entry.user.username }}</p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            {% if entry.course_count %}
+            <span class="badge badge-public">
+              {{ entry.course_count }} course{{ '' if entry.course_count == 1
+              else 's' }}
+            </span>
+            {% endif %} {% if entry.overall_count %}
+            <span class="badge badge-public">
+              {{ entry.overall_count }} overall
+            </span>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">Nobody has made any grades public yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

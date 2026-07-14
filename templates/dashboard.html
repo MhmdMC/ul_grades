@@ -1,127 +1,96 @@
 {% extends 'base.html' %} {% set title = 'Dashboard - UL Grade Monitor' %} {%
 block content %}
-<div class="space-y-6">
+<div class="section-stack">
   {% if admin_viewing %}
-  <div class="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-5 py-3 text-sm text-amber-100">
-    Viewing <strong>{{ user.username }}</strong>'s dashboard as an admin (read-only).
-    <a href="{{ url_for('admin_users') }}" class="ml-2 underline hover:text-amber-50">Back to admin</a>
+  <div class="alert alert-warning flex flex-wrap items-center justify-between gap-3">
+    <span>
+      Viewing <strong>{{ user.username }}</strong>'s dashboard as an admin
+      (read-only).
+    </span>
+    <a class="btn btn-sm" href="{{ url_for('admin_users') }}">Back to admin</a>
   </div>
-  {% endif %}
+  {% else %}
   <div
     id="enter-overlay"
     class="fixed inset-0 z-40 grid place-items-center bg-slate-950/95 px-6"
   >
-    <div
-      class="max-w-xl rounded-[2rem] border border-white/10 bg-white/6 p-8 text-center shadow-glow backdrop-blur-xl"
-    >
-      <p class="text-sm uppercase tracking-[0.35em] text-slate-400">
-        UL Grade Monitor
-      </p>
+    <div class="card max-w-xl text-center backdrop-blur-xl">
+      <p class="eyebrow">UL Grade Monitor</p>
       <h1 class="mt-3 text-4xl font-semibold">
         This page plays sounds when grades change.
       </h1>
       <p class="mt-4 text-slate-300">Click Enter to begin monitoring.</p>
-      <button
-        id="enter-monitoring"
-        class="mt-8 rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-6 py-3 font-semibold text-slate-950 transition hover:scale-[1.02]"
-      >
-        ENTER
-      </button>
+      <button id="enter-monitoring" class="btn btn-primary mt-8">ENTER</button>
     </div>
   </div>
+  {% endif %}
 
-  <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Student name</p>
-      <p id="student-name" class="mt-2 text-xl font-semibold">
-        {{ user.ul_name or snapshot.student_name or 'Not available' }}
-      </p>
-    </div>
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Student ID</p>
-      <p class="mt-2 text-xl font-semibold">
-        {{ user.ul_student_id[-4:] if user.ul_student_id else 'Not available' }}
-      </p>
-    </div>
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Connection status</p>
-      <p
-        id="connection-status"
-        class="mt-2 text-xl font-semibold text-emerald-300"
-      >
-        Disconnected
-      </p>
+  <section class="card">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <p class="eyebrow">Dashboard</p>
+        <h1 id="student-name" class="mt-2 text-3xl font-semibold">
+          {{ user.ul_name or snapshot.student_name or 'Not available' }}
+        </h1>
+        <p class="card-subtitle">
+          Student ID ending in
+          {{ user.ul_student_id[-4:] if user.ul_student_id else '----' }}
+          {% if group %} &middot; {{ group.name }}{% endif %}
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <span id="connection-status" class="badge badge-muted">
+          Disconnected
+        </span>
+        {% if not admin_viewing %}
+        <a class="btn btn-sm" href="{{ url_for('share_settings') }}"
+          >Sharing settings</a
+        >
+        {% endif %}
+      </div>
     </div>
   </section>
 
-  <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Average</p>
-      <p id="average-value" class="mt-2 text-2xl font-semibold">
-        {{ snapshot.average if snapshot.average is not none else 'Not available'
-        }}
+  <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    {% for stat_id, label, value in [ ('stat-average', 'Partial average',
+    snapshot.average), ('stat-overall-rank', 'Partial rank',
+    snapshot.overall_rank), ('stat-final-average', 'Final average',
+    snapshot.final_average), ('stat-final-rank', 'Final rank',
+    snapshot.final_rank) ] %}
+    <div class="stat">
+      <p class="stat-label">{{ label }}</p>
+      <p id="{{ stat_id }}" class="stat-value">
+        {{ value if value is not none else 'Not available' }}
       </p>
     </div>
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Overall rank</p>
-      <p id="rank-value" class="mt-2 text-2xl font-semibold">
-        {{ snapshot.overall_rank if snapshot.overall_rank is not none else 'Not
-        available' }}
-      </p>
-    </div>
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Final average</p>
-      <p id="final-average-value" class="mt-2 text-2xl font-semibold">
-        {{ snapshot.final_average if snapshot.final_average is not none else
-        'Not available' }}
-      </p>
-    </div>
-    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
-      <p class="text-sm text-slate-400">Final rank</p>
-      <p id="final-rank-value" class="mt-2 text-2xl font-semibold">
-        {{ snapshot.final_rank if snapshot.final_rank is not none else 'Not
-        available' }}
-      </p>
-    </div>
+    {% endfor %}
   </section>
 
   <section>
-    <div class="mb-4 flex items-center justify-between">
-      <div>
-        <h2 class="text-2xl font-semibold">Grade cards</h2>
-      </div>
-    </div>
+    <h2 class="card-title mb-3">Courses</h2>
+    {% if courses %}
     <div id="cards" class="grid gap-4 xl:grid-cols-2">
       {% for course in courses %}
-      <article
-        class="grade-card rounded-[1.75rem] border border-white/10 bg-white/6 p-5 shadow-glow transition duration-500"
-        data-course-key="{{ course.key }}"
-      >
-        <div class="flex items-start justify-between gap-4">
+      <article class="grade-card card" data-course-key="{{ course.key }}">
+        <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p class="text-lg font-semibold text-cyan-200">{{ course.name }}</p>
-            <p class="text-sm text-slate-300">{{ course.code }}</p>
+            <p class="text-sm text-slate-400">{{ course.code }}</p>
           </div>
-          <div
-            class="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-300"
-          >
-            Credits: {{ course.credits if course.credits is not none else 'Not
-            Available' }}
-          </div>
+          <span class="badge badge-muted">
+            Credits: {{ course.credits if course.credits is not none else 'N/A'
+            }}
+          </span>
         </div>
-        <div class="mt-5 grid gap-3 sm:grid-cols-2">
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
           {% for label, value, color in [ ('Partial grade', course.partial,
           course.partial_color), ('Partial rank', course.partial_rank,
           'neutral'), (course.final_label, course.final_value,
           course.final_color), ('Final rank', course.final_rank, 'neutral') ] %}
-          <div class="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
-            <p class="text-xs uppercase tracking-[0.3em] text-slate-400">
-              {{ label }}
-            </p>
-            <p
-              class="mt-2 text-2xl font-semibold {{ 'text-emerald-300' if color == 'green' else 'text-amber-300' if color == 'orange' else 'text-rose-300' if color == 'red' else 'text-slate-100' }}"
-            >
-              {{ value if value is not none else 'Not Available' }}
+          <div class="stat">
+            <p class="stat-label">{{ label }}</p>
+            <p class="stat-value stat-value-sm value-{{ color }}">
+              {{ value if value is not none else 'Not available' }}
             </p>
           </div>
           {% endfor %}
@@ -129,18 +98,28 @@ block content %}
       </article>
       {% endfor %}
     </div>
+    {% else %}
+    <div class="empty-state">
+      No grades stored yet. They will appear here as soon as the monitor picks
+      them up.
+    </div>
+    {% endif %}
   </section>
 
   {% if consent_form %}
-  <section class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
-    <h2 class="text-lg font-semibold">Privacy preference</h2>
-    <form method="post" action="{{ url_for('update_consent') }}" class="mt-3 flex flex-wrap items-center gap-3">
+  <section class="card">
+    <h2 class="card-title">Privacy preference</h2>
+    <form
+      method="post"
+      action="{{ url_for('update_consent') }}"
+      class="mt-4 flex flex-wrap items-center justify-between gap-3"
+    >
       {{ consent_form.hidden_tag() }}
-      <label class="flex items-center gap-2 text-sm text-slate-300">
-        {{ consent_form.hostage_consent() }}
+      <label class="check-row">
+        {{ consent_form.hostage_consent(class='checkbox') }}
         <span>{{ consent_form.hostage_consent.label.text }}</span>
       </label>
-      {{ consent_form.submit(class='rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/10') }}
+      {{ consent_form.submit(class='btn') }}
     </form>
   </section>
   {% endif %}
