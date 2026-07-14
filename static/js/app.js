@@ -41,26 +41,36 @@
 
   function ensureAudioUnlocked() {
     if (!window.AudioContext && !window.webkitAudioContext) return;
-    if (!audioContext)
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioContext.state === "suspended") audioContext.resume();
+    try {
+      if (!audioContext)
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioContext.state === "suspended") audioContext.resume();
+    } catch (e) {
+      console.warn("AudioContext error:", e);
+    }
   }
 
   function beep(durationMs = 360, frequency = 880) {
     if (!audioContext) return;
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    oscillator.type = "square";
-    oscillator.frequency.value = frequency;
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
-    gain.gain.value = 1;
-    oscillator.start();
-    setTimeout(() => {
-      oscillator.stop();
-      oscillator.disconnect();
-      gain.disconnect();
-    }, durationMs);
+    try {
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = "square";
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      gain.gain.value = 1;
+      oscillator.start();
+      setTimeout(() => {
+        try {
+          oscillator.stop();
+          oscillator.disconnect();
+          gain.disconnect();
+        } catch (e) { /* already stopped */ }
+      }, durationMs);
+    } catch (e) {
+      console.warn("beep error:", e);
+    }
   }
 
   function playAlarm(seconds = 5) {
@@ -182,8 +192,6 @@
   }
 
   function testGradeSound() {
-    // Unlock first: the alarm comes back to this browser as a broadcast like
-    // any other client's, and audio will not play without a user gesture.
     ensureAudioUnlocked();
 
     if (!socket) {
@@ -200,6 +208,8 @@
       return;
 
     socket.emit("admin_test_alarm");
+    toast("Alarm sent", "Playing alarm for all connected clients.", "info");
+    playAlarm(3);
   }
 
   if (overlay && localStorage.getItem("ul_grade_monitor_unlocked") === "1") {
