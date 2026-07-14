@@ -24,24 +24,31 @@ DEFAULT_HEADERS = {
     ),
 }
 
-
-@dataclass
 class ULAPIResponse:
-    endpoint: str
-    status_code: int
-    response_time: float
-    duration: float
-    json_data: Optional[Any]
-    text: Optional[str] = None
-    
     __slots__ = (
-        'endpoint', 
-        'status_code', 
-        'response_time', 
-        'duration', 
-        'json_data', 
-        'text'
+        "endpoint",
+        "status_code",
+        "response_time",
+        "duration",
+        "json_data",
+        "text",
     )
+
+    def __init__(
+        self,
+        endpoint: str,
+        status_code: int,
+        response_time: float,
+        duration: float,
+        json_data: Optional[Any],
+        text: Optional[str] = None,
+    ):
+        self.endpoint = endpoint
+        self.status_code = status_code
+        self.response_time = response_time
+        self.duration = duration
+        self.json_data = json_data
+        self.text = text
 
 
 class ULAPIError(RuntimeError):
