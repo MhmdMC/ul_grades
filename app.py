@@ -29,6 +29,8 @@ from flask_login import (
     login_user,
     logout_user,
 )
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_socketio import SocketIO, join_room
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect, FlaskForm
@@ -72,8 +74,18 @@ socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*", logge
 scheduler = BackgroundScheduler(daemon=True)
 
 
+def get_ip_address() -> str:
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+limiter = Limiter(app=app, key_func=get_ip_address, default_limits=["200 per day", "50 per hour"])
+
+
 class SchoolClass(db.Model):
-    """Human-readable identity of a UL class, fetched once per new class id."""
+    """Human-readable identity of a ULFG class, fetched once per new class id."""
 
     __tablename__ = "classes"
 
@@ -123,6 +135,7 @@ class User(UserMixin, db.Model):
     last_seen_at = db.Column(db.DateTime, nullable=True)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     hostage_consent = db.Column(db.Boolean, default=False, nullable=False)
+    force_password_change = db.Column(db.Boolean, default=False, nullable=False)
 
     group = relationship("Group", back_populates="users", foreign_keys=[group_id])
     ul_credential = relationship("ULCredential", uselist=False, cascade="all, delete-orphan", passive_deletes=False)
@@ -141,7 +154,7 @@ class ULCredential(db.Model):
 
 class Grade(db.Model):
     """One row per (user, material). The stored copy is what the UI reads, so a
-    page view never costs a UL API call - only the poller writes here."""
+    page view never costs a ULFG API call - only the poller writes here."""
 
     __tablename__ = "grades"
 
@@ -214,6 +227,15 @@ class LogEntry(db.Model):
     exception = db.Column(db.Text, nullable=True)
 
 
+class FailedLogin(db.Model):
+    __tablename__ = "failed_logins"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), nullable=True, index=True)
+    ip_address = db.Column(db.String(45), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class ULIdentityBootstrapError(RuntimeError):
     pass
 
@@ -225,7 +247,7 @@ class AuthForm(FlaskForm):
 
 
 class RegisterForm(AuthForm):
-    ul_cookie = TextAreaField("UL Cookie", validators=[DataRequired(), Length(min=10)])
+    ul_cookie = TextAreaField("ULFG Cookie", validators=[DataRequired(), Length(min=10)])
     remember_me = BooleanField("Remember me", default=True)
     hostage_consent = BooleanField(
         "If you turn this on you consent to admins seeing your grades, keep it off otherwise.",
@@ -235,8 +257,8 @@ class RegisterForm(AuthForm):
 
 
 class RegisterWithCredentialsForm(AuthForm):
-    ul_username = StringField("UL Username", validators=[DataRequired(), Length(min=3, max=80)])
-    ul_password = PasswordField("UL Password", validators=[DataRequired(), Length(min=6, max=128)])
+    ul_username = StringField("ULFG Username", validators=[DataRequired(), Length(min=3, max=80)])
+    ul_password = PasswordField("ULFG Password", validators=[DataRequired(), Length(min=6, max=128)])
     remember_me = BooleanField("Remember me", default=True)
     hostage_consent = BooleanField(
         "If you turn this on you consent to admins seeing your grades, keep it off otherwise.",
@@ -246,18 +268,18 @@ class RegisterWithCredentialsForm(AuthForm):
 
 
 class CookieForm(FlaskForm):
-    ul_cookie = TextAreaField("UL Cookie", validators=[DataRequired(), Length(min=10)])
+    ul_cookie = TextAreaField("ULFG Cookie", validators=[DataRequired(), Length(min=10)])
     submit = SubmitField("Save cookie")
 
 class ULCredentialsForm(FlaskForm):
-    ul_username = StringField("UL Username", validators=[DataRequired(), Length(min=3, max=80)])
-    ul_password = PasswordField("UL Password", validators=[DataRequired(), Length(min=6, max=128)])
+    ul_username = StringField("ULFG Username", validators=[DataRequired(), Length(min=3, max=80)])
+    ul_password = PasswordField("ULFG Password", validators=[DataRequired(), Length(min=6, max=128)])
     submit = SubmitField("Get cookie")
 
 
 class LoginForm(FlaskForm):
-    username = StringField("Username", validators=[DataRequired()])
-    password = PasswordField("Password", validators=[DataRequired()])
+    username = StringField("Username or ULFG student ID", validators=[DataRequired()])
+    password = PasswordField("Password or ULFG password", validators=[DataRequired()])
     remember_me = BooleanField("Remember me", default=True)
     submit = SubmitField("Login")
 
@@ -265,7 +287,7 @@ class LoginForm(FlaskForm):
 class AdminCreateUserForm(FlaskForm):
     username = StringField("Username", validators=[DataRequired(), Length(min=3, max=80)])
     password = PasswordField("Password", validators=[DataRequired(), Length(min=6, max=128)])
-    ul_cookie = TextAreaField("UL Cookie", validators=[DataRequired()])
+    ul_cookie = TextAreaField("ULFG Cookie", validators=[DataRequired()])
     submit = SubmitField("Create")
 
 
@@ -273,14 +295,17 @@ class AdminResetClassCacheForm(FlaskForm):
     submit = SubmitField("Reset cached class IDs")
 
 
-class AdminChangePasswordForm(FlaskForm):
-    current_password = PasswordField("Current password", validators=[DataRequired()])
+class ChangePasswordForm(FlaskForm):
+    current_password = PasswordField("Current password or ULFG password", validators=[DataRequired()])
     new_password = PasswordField("New password", validators=[DataRequired(), Length(min=6, max=128)])
     confirm_password = PasswordField(
         "Confirm new password",
         validators=[DataRequired(), EqualTo("new_password", message="Passwords must match.")],
     )
     submit = SubmitField("Change password")
+
+
+AdminChangePasswordForm = ChangePasswordForm
 
 
 class ConsentForm(FlaskForm):
@@ -297,6 +322,21 @@ POLL_LOCK = False
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def is_account_locked(username: str | None) -> bool:
+    if not username:
+        return False
+    cutoff = now_utc() - timedelta(minutes=15)
+    recent = FailedLogin.query.filter(
+        FailedLogin.username == username, FailedLogin.created_at >= cutoff
+    ).count()
+    return recent >= 10
+
+
+def clear_failed_logins(username: str) -> None:
+    FailedLogin.query.filter_by(username=username).delete()
+    db.session.commit()
 
 
 def log_event(
@@ -373,6 +413,8 @@ def ensure_user_name_column() -> None:
         db.session.execute(text("ALTER TABLE users ADD COLUMN ul_name VARCHAR(255)"))
     if "hostage_consent" not in columns:
         db.session.execute(text("ALTER TABLE users ADD COLUMN hostage_consent BOOLEAN NOT NULL DEFAULT 0"))
+    if "force_password_change" not in columns:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN force_password_change BOOLEAN NOT NULL DEFAULT 0"))
 
     group_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(groups)"))}
     if "class_id" not in group_columns:
@@ -423,7 +465,7 @@ def build_class_name(payload: dict[str, Any]) -> str | None:
 
 
 def ensure_class_record(class_id: str, user: User) -> SchoolClass | None:
-    """Resolve a class id to its real name. Only calls UL the first time we see the class."""
+    """Resolve a class id to its real name. Only calls ULFG the first time we see the class."""
     if not class_id:
         return None
 
@@ -611,7 +653,7 @@ def normalize_snapshot(payload: Any) -> dict[str, Any]:
         final_average = None
         final_rank = None
 
-    # UL's API reports 0 / 0.0 (instead of null) for the final average/rank
+    # ULFG's API reports 0 / 0.0 (instead of null) for the final average/rank
     # before any final grades exist - treat that the same as "not available",
     # same as a null finalGrade on an individual course.
     if not final_average:
@@ -690,19 +732,19 @@ def refresh_cookie_from_credentials(user: User) -> bool:
         log_event(
             "warning",
             "cookie_auto_refresh_failed",
-            f"Stored UL credentials failed to refresh cookie for {user.username}: {exc}",
+            f"Stored ULFG credentials failed to refresh cookie for {user.username}: {exc}",
             user_id=user.id,
             group_id=user.group_id,
         )
         return False
 
     user.ul_cookie = new_cookie
-    user.last_request_result = "cookie auto-refreshed from stored UL credentials"
+    user.last_request_result = "cookie auto-refreshed from stored ULFG credentials"
     db.session.commit()
     log_event(
         "info",
         "cookie_auto_refresh",
-        f"Auto-refreshed UL cookie for {user.username} using stored credentials",
+        f"Auto-refreshed ULFG cookie for {user.username} using stored credentials",
         user_id=user.id,
         group_id=user.group_id,
     )
@@ -716,11 +758,11 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
         ensure_ul_identity_from_cookie(user, force=True)
         response = api_request(user)
         if response.status_code == 401:
-            raise ULIdentityBootstrapError("That UL cookie is invalid or expired.")
+            raise ULIdentityBootstrapError("That ULFG cookie is invalid or expired.")
         if response.status_code == 403:
-            raise ULIdentityBootstrapError("UL authorization was denied for that cookie.")
+            raise ULIdentityBootstrapError("ULFG authorization was denied for that cookie.")
         if response.status_code >= 500:
-            raise ULIdentityBootstrapError(f"UL server error {response.status_code} while validating that cookie.")
+            raise ULIdentityBootstrapError(f"ULFG server error {response.status_code} while validating that cookie.")
     except Exception:
         user.ul_cookie = previous_cookie
         db.session.commit()
@@ -736,7 +778,7 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     log_event(
         "info",
         "cookie_update",
-        f"UL cookie updated for {user.username}",
+        f"ULFG cookie updated for {user.username}",
         user_id=user.id,
         group_id=user.group_id,
         endpoint=response.endpoint,
@@ -840,7 +882,7 @@ def persist_snapshot(user: User, normalized: dict[str, Any]) -> None:
 
 
 def stored_snapshot(user: User) -> dict[str, Any] | None:
-    """Rebuild a normalized snapshot from the database. Never calls the UL API."""
+    """Rebuild a normalized snapshot from the database. Never calls the ULFG API."""
     grades = Grade.query.filter_by(user_id=user.id).order_by(Grade.material_id.asc()).all()
     if not grades:
         return None
@@ -1098,7 +1140,7 @@ def viewable_profile(user: User, viewer: User) -> dict[str, Any] | None:
 
 
 def search_students(query: str, limit: int = 40) -> list[dict[str, Any]]:
-    """Match on the last 4 digits of the UL id, or on the UL name."""
+    """Match on the last 4 digits of the ULFG id, or on the ULFG name."""
     needle = query.strip().lower()
     if not needle:
         return []
@@ -1168,7 +1210,7 @@ def public_profile(user: User) -> dict[str, Any] | None:
 
 def api_request(user: User) -> ULAPIResponse:
     if not user.ul_student_id or not user.ul_class_id:
-        raise ValueError("Missing UL student or class id")
+        raise ValueError("Missing ULFG student or class id")
     return ul_api.get_grades(user.ul_student_id, user.ul_class_id, user.ul_cookie or "")
 
 
@@ -1222,7 +1264,7 @@ def latest_class_id_from_payload(payload: Any) -> str | None:
 
 def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     if not user.ul_cookie:
-        raise ULIdentityBootstrapError("No UL cookie is saved for this account.")
+        raise ULIdentityBootstrapError("No ULFG cookie is saved for this account.")
     if not force and user.ul_student_id and user.ul_class_id:
         return False
 
@@ -1230,17 +1272,17 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     if me_response.status_code == 401 and refresh_cookie_from_credentials(user):
         me_response = ul_api.get_me(user.ul_cookie)
     if me_response.status_code == 401:
-        raise ULIdentityBootstrapError("UL cookie is invalid or expired.")
+        raise ULIdentityBootstrapError("ULFG cookie is invalid or expired.")
     if me_response.status_code == 403:
-        raise ULIdentityBootstrapError("UL authorization was denied for that cookie.")
+        raise ULIdentityBootstrapError("ULFG authorization was denied for that cookie.")
     if me_response.status_code >= 500:
-        raise ULIdentityBootstrapError(f"UL server error {me_response.status_code} while loading profile data.")
+        raise ULIdentityBootstrapError(f"ULFG server error {me_response.status_code} while loading profile data.")
     if not isinstance(me_response.json_data, dict):
-        raise ULIdentityBootstrapError("UL profile response was not valid JSON.")
+        raise ULIdentityBootstrapError("ULFG profile response was not valid JSON.")
 
     student_username = find_nested_string_value(me_response.json_data, ("username", "userName", "studentUsername", "login")) or ""
     if not student_username:
-        raise ULIdentityBootstrapError("UL profile did not include a username.")
+        raise ULIdentityBootstrapError("ULFG profile did not include a username.")
 
     student_name = find_nested_string_value(me_response.json_data, ("name", "fullName", "displayName"))
 
@@ -1248,15 +1290,15 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     if classes_response.status_code == 401 and refresh_cookie_from_credentials(user):
         classes_response = ul_api.get_student_classes(student_username, user.ul_cookie)
     if classes_response.status_code == 401:
-        raise ULIdentityBootstrapError("UL cookie is invalid or expired.")
+        raise ULIdentityBootstrapError("ULFG cookie is invalid or expired.")
     if classes_response.status_code == 403:
-        raise ULIdentityBootstrapError("UL authorization was denied for that cookie.")
+        raise ULIdentityBootstrapError("ULFG authorization was denied for that cookie.")
     if classes_response.status_code >= 500:
-        raise ULIdentityBootstrapError(f"UL server error {classes_response.status_code} while loading classes.")
+        raise ULIdentityBootstrapError(f"ULFG server error {classes_response.status_code} while loading classes.")
 
     latest_class_id = latest_class_id_from_payload(classes_response.json_data)
     if not latest_class_id:
-        raise ULIdentityBootstrapError("UL classes response did not include any classes.")
+        raise ULIdentityBootstrapError("ULFG classes response did not include any classes.")
 
     previous_group = user.group
     # Set the student id first: resolving the class name is a per-student UL call.
@@ -1267,7 +1309,7 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     user.ul_class_id = latest_class_id
     user.group_id = group.id
     user.updated_at = now_utc()
-    user.last_request_result = "UL identity refreshed"
+    user.last_request_result = "ULFG identity refreshed"
     group.paused = False
     if group.representative_user_id is None:
         group.representative_user_id = user.id
@@ -1303,7 +1345,7 @@ def emit_status(group: Group, message: str, level: str = "info") -> None:
 
 
 def emit_cookie_required(user: User) -> None:
-    socketio.emit("cookie_required", {"message": "UL cookie expired. Please paste a new cookie.", "user_id": user.id}, to=f"user-{user.id}")
+    socketio.emit("cookie_required", {"message": "ULFG cookie expired. Please paste a new cookie.", "user_id": user.id}, to=f"user-{user.id}")
 
 
 def summarize_change(changes: list[dict[str, Any]]) -> str:
@@ -1381,7 +1423,7 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
         log_event(
             "warning",
             "unauthorized",
-            f"UL cookie invalid for {user.username}",
+            f"ULFG cookie invalid for {user.username}",
             user_id=user.id,
             group_id=user.group_id,
             endpoint=response.endpoint,
@@ -1398,7 +1440,7 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
         log_event(
             "warning",
             "forbidden",
-            f"UL authorization denied for {user.username}",
+            f"ULFG authorization denied for {user.username}",
             user_id=user.id,
             group_id=user.group_id,
             endpoint=response.endpoint,
@@ -1414,7 +1456,7 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
         log_event(
             "error",
             "poll_failure",
-            f"UL server error for {user.username}: {response.status_code}",
+            f"ULFG server error for {user.username}: {response.status_code}",
             user_id=user.id,
             group_id=user.group_id,
             endpoint=response.endpoint,
@@ -1478,10 +1520,10 @@ def poll_group(group: Group) -> None:
         if not representative:
             group.paused = True
             db.session.commit()
-            emit_status(group, "Monitoring paused. No valid UL cookie available.", "warning")
+            emit_status(group, "Monitoring paused. No valid ULFG cookie available.", "warning")
             for user in User.query.filter_by(group_id=group.id).all():
                 emit_cookie_required(user)
-            log_event("warning", "group_paused", f"Group {group.name} paused: no valid UL cookie", group_id=group.id)
+            log_event("warning", "group_paused", f"Group {group.name} paused: no valid ULFG cookie", group_id=group.id)
             return
 
         try:
@@ -1531,7 +1573,7 @@ def poll_group(group: Group) -> None:
             if next_rep is None:
                 group.paused = True
                 db.session.commit()
-                emit_status(group, "Monitoring paused. Please update a UL cookie.", "warning")
+                emit_status(group, "Monitoring paused. Please update a ULFG cookie.", "warning")
                 for user in User.query.filter_by(group_id=group.id).all():
                     emit_cookie_required(user)
             else:
@@ -1561,7 +1603,7 @@ def poll_group(group: Group) -> None:
             log_event(
                 "error",
                 "poll_failure",
-                f"UL server error for {representative.username}: {response.status_code}",
+                f"ULFG server error for {representative.username}: {response.status_code}",
                 user_id=representative.id,
                 group_id=group.id,
                 endpoint=response.endpoint,
@@ -1635,7 +1677,7 @@ def dashboard_context(user: User) -> dict[str, Any]:
 def ensure_dashboard_snapshot(user: User) -> None:
     """Fetch from UL only when we have nothing stored yet. Once grades are in the
     database, the poller is the only thing that refreshes them - viewing a page
-    never costs a UL API call."""
+    never costs a ULFG API call."""
     if not user.ul_cookie:
         return
     if Grade.query.filter_by(user_id=user.id).first():
@@ -1724,6 +1766,7 @@ def index():
 
 
 @app.route("/register", methods=["GET", "POST"])
+@limiter.limit("3 per minute", methods=["POST"])
 def register():
     register_cookie_form = RegisterForm()
     register_credentials_form = RegisterWithCredentialsForm()
@@ -1744,7 +1787,7 @@ def register():
             try:
                 ensure_ul_identity_from_cookie(user, force=True)
             except ULIdentityBootstrapError as exc:
-                flash(f"UL profile could not be loaded: {exc}", "error")
+                flash(f"ULFG profile could not be loaded: {exc}", "error")
                 return redirect(url_for("update_cookie"))
             log_event("info", "register", f"User {user.username} registered", user_id=user.id, group_id=user.group_id)
             return redirect(url_for("dashboard"))
@@ -1752,6 +1795,8 @@ def register():
     elif register_credentials_form.validate_on_submit():
         if User.query.filter_by(username=register_credentials_form.username.data).first():
             flash("Username already exists.", "error")
+        elif ULCredential.query.filter_by(username=register_credentials_form.ul_username.data).first():
+            flash("ULFG username already registered.", "error")
         else:
             try:
                 cookie = ul_api.login_with_credentials(register_credentials_form.ul_username.data, register_credentials_form.ul_password.data)
@@ -1776,19 +1821,49 @@ def register():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def login():
     form = LoginForm()
     if form.validate_on_submit():
-        user = User.query.filter_by(username=form.username.data).first()
-        if not user or not check_password_hash(user.password_hash, form.password.data):
-            flash("Invalid username or password.", "error")
+        username_input = form.username.data
+        ip = get_ip_address()
+
+        if is_account_locked(username_input):
+            log_event("warning", "login_locked", f"Locked account attempt for {username_input} from {ip}")
+            flash("Account temporarily locked due to too many failed attempts. Try again later.", "error")
+            return render_template("auth/login.html", form=form)
+
+        user = User.query.filter(
+            or_(User.username == username_input, User.ul_student_id == username_input)
+        ).first()
+        if user and check_password_hash(user.password_hash, form.password.data):
+            pass
+        elif user and user.ul_student_id:
+            try:
+                ul_api.login_with_credentials(user.ul_student_id, form.password.data)
+                user.password_hash = generate_password_hash(form.password.data)
+                db.session.commit()
+            except Exception:
+                user = None
         else:
+            user = None
+
+        if not user:
+            db.session.add(FailedLogin(username=username_input, ip_address=ip))
+            db.session.commit()
+            log_event("warning", "login_failed", f"Failed login for {username_input} from {ip}", endpoint="/login")
+            flash("Invalid username or password. You can also use your ULFG student ID and ULFG password.", "error")
+        else:
+            clear_failed_logins(username_input)
             login_user(user, remember=form.remember_me.data, fresh=True)
+            if user.force_password_change:
+                flash("Please set a new password before continuing.", "warning")
+                return redirect(url_for("change_password"))
             if not user.ul_student_id or not user.ul_class_id:
                 try:
                     ensure_ul_identity_from_cookie(user, force=True)
                 except ULIdentityBootstrapError as exc:
-                    flash(f"UL profile could not be loaded: {exc}", "error")
+                    flash(f"ULFG profile could not be loaded: {exc}", "error")
                     return redirect(url_for("update_cookie"))
             log_event("info", "login", f"User {user.username} logged in", user_id=user.id, group_id=user.group_id)
             next_url = request.args.get("next") or url_for("dashboard")
@@ -1834,6 +1909,36 @@ def update_cookie():
     return render_template("cookie.html", cookie_form=cookie_form, credentials_form=credentials_form)
 
 
+@app.route("/change-password", methods=["GET", "POST"])
+@login_required
+def change_password():
+    form = ChangePasswordForm()
+    force_change = current_user.force_password_change
+
+    if force_change:
+        form.current_password.data = "placeholder"
+    if form.validate_on_submit():
+        if not force_change:
+            current_pw = form.current_password.data
+            if not check_password_hash(current_user.password_hash, current_pw):
+                try:
+                    if current_user.ul_student_id:
+                        ul_api.login_with_credentials(current_user.ul_student_id, current_pw)
+                    else:
+                        raise ValueError("no student ID")
+                except Exception:
+                    flash("Current password is incorrect.", "error")
+                    return render_template("change_password.html", form=form, force_password_change=force_change)
+
+        current_user.password_hash = generate_password_hash(form.new_password.data)
+        current_user.force_password_change = False
+        db.session.commit()
+        flash("Password updated.", "success")
+        return redirect(url_for("dashboard"))
+
+    return render_template("change_password.html", form=form, force_password_change=force_change)
+
+
 @app.route("/help")
 def help_page():
     return render_template("help.html")
@@ -1849,7 +1954,7 @@ def dashboard():
         try:
             ensure_ul_identity_from_cookie(current_user, force=True)
         except ULIdentityBootstrapError as exc:
-            flash(f"UL profile could not be loaded: {exc}", "error")
+            flash(f"ULFG profile could not be loaded: {exc}", "error")
             return redirect(url_for("update_cookie"))
     ensure_dashboard_snapshot(current_user)
     context = dashboard_context(current_user)
@@ -2045,7 +2150,7 @@ def dashboard_api():
         try:
             ensure_ul_identity_from_cookie(current_user, force=True)
         except ULIdentityBootstrapError:
-            return jsonify({"error": "UL profile is missing."}), 409
+            return jsonify({"error": "ULFG profile is missing."}), 409
     ensure_dashboard_snapshot(current_user)
     context = dashboard_context(current_user)
     return jsonify(
@@ -2167,7 +2272,7 @@ def admin_users():
             user.ul_cookie = None
             user.last_request_result = "cookie reset by admin"
             db.session.commit()
-            flash("UL cookie reset.", "success")
+            flash("ULFG cookie reset.", "success")
             emit_cookie_required(user)
         elif action in {"move_group", "set_group"}:
             group_name = request.form.get("group_name", "").strip()
@@ -2225,7 +2330,7 @@ def admin_create_user():
         try:
             ensure_ul_identity_from_cookie(user, force=True)
         except ULIdentityBootstrapError as exc:
-            flash(f"User created, but UL profile could not be loaded: {exc}", "warning")
+            flash(f"User created, but ULFG profile could not be loaded: {exc}", "warning")
             return redirect(url_for("admin_users"))
         flash("User created.", "success")
         return redirect(url_for("admin_users"))
@@ -2271,7 +2376,24 @@ def admin_reset_cookie(user_id: int):
     user.last_request_result = "cookie reset by admin"
     db.session.commit()
     emit_cookie_required(user)
-    flash("UL cookie reset.", "success")
+    flash("ULFG cookie reset.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<int:user_id>/reset-password", methods=["POST"])
+@login_required
+def admin_reset_password(user_id: int):
+    if not is_admin_user():
+        abort(403)
+    user = db.session.get(User, user_id)
+    if not user:
+        abort(404)
+    import secrets
+    new_password = secrets.token_urlsafe(12)
+    user.password_hash = generate_password_hash(new_password)
+    user.force_password_change = True
+    db.session.commit()
+    flash(f"Password for {user.username} reset to: {new_password}", "warning")
     return redirect(url_for("admin_users"))
 
 

@@ -1,26 +1,26 @@
-{% extends 'base.html' %} {% set title = 'Update UL Connection - UL Grade Monitor'
+{% extends 'base.html' %} {% set title = 'Update ULFG Connection - ULFG Grade Monitor'
 %} {% block content %}
 <div class="mx-auto max-w-4xl py-8">
   <div class="card">
     <p class="meta">Authentication</p>
-    <h1 class="mt-2 text-lg font-semibold">Update UL connection</h1>
+    <h1 class="mt-2 text-lg font-semibold">Update ULFG connection</h1>
     <p class="card-subtitle">
-      Signing in with your UL login lets the monitor renew the cookie by itself
+      Signing in with your ULFG login lets the monitor renew the cookie by itself
       the next time it expires.
     </p>
 
     <div class="mt-8 grid gap-8 md:grid-cols-2">
       <form method="post" class="space-y-4">
         {{ credentials_form.hidden_tag() }}
-        <h2 class="card-title">Login with UL</h2>
+        <h2 class="card-title">Login with ULFG</h2>
 
         <div>
-          <label class="field-label">UL username</label>
+          <label class="field-label">ULFG username</label>
           {{ credentials_form.ul_username(class='input') }}
         </div>
         <div>
-          <label class="field-label">UL password</label>
-          {{ credentials_form.ul_password(class='input') }}
+          <label class="field-label">ULFG password</label>
+          {{ credentials_form.ul_password(class='input', autocomplete='off') }}
         </div>
 
         {{ credentials_form.submit(class='btn btn-primary btn-block') }}
@@ -38,7 +38,7 @@
         </div>
 
         <div>
-          <label class="field-label">UL cookie</label>
+          <label class="field-label">ULFG cookie</label>
           {{ cookie_form.ul_cookie(class='textarea') }}
         </div>
 

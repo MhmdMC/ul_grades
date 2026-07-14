@@ -1,4 +1,4 @@
-{% extends 'base.html' %} {% set title = 'Admin Users - UL Grade Monitor' %} {%
+{% extends 'base.html' %} {% set title = 'Admin Users - ULFG Grade Monitor' %} {%
 block content %}
 <div class="section-stack">
   <section class="card">
@@ -46,7 +46,7 @@ block content %}
       </div>
       <div>
         {{ create_form.password.label(class='field-label') }} {{
-        create_form.password(class='input') }}
+        create_form.password(class='input', autocomplete='new-password') }}
       </div>
       <div class="md:col-span-2">
         {{ create_form.submit(class='btn btn-primary') }}
@@ -59,10 +59,10 @@ block content %}
       <thead>
         <tr>
           <th>Website username</th>
-          <th>UL student id</th>
+          <th>ULFG student id</th>
           <th>Class id</th>
           <th>Monitoring group</th>
-          <th>UL cookie</th>
+          <th>ULFG cookie</th>
           <th>Hostage consent</th>
           <th>Last successful request</th>
           <th>Last request result</th>
@@ -113,9 +113,13 @@ block content %}
                 >View dashboard</a
               >
               {% endif %}
+              <form method="post" action="{{ url_for('admin_reset_password', user_id=user.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button class="btn btn-sm btn-block">Reset password</button>
+              </form>
               <form method="post" action="{{ url_for('admin_reset_cookie', user_id=user.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button class="btn btn-sm btn-block">Reset UL cookie</button>
+                <button class="btn btn-sm btn-block">Reset ULFG cookie</button>
               </form>
               <form method="post" action="{{ url_for('admin_delete_user', user_id=user.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />

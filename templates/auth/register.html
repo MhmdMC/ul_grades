@@ -1,18 +1,18 @@
-{% extends 'base.html' %} {% set title = 'Register - UL Grade Monitor' %} {%
+{% extends 'base.html' %} {% set title = 'Register - ULFG Grade Monitor' %} {%
 block content %}
 <div class="mx-auto max-w-4xl py-8">
   <div class="card">
     <p class="meta">Create account</p>
     <h1 class="mt-2 text-lg font-semibold">Set up your monitoring profile</h1>
     <p class="card-subtitle">
-      Pick either method &mdash; signing in with your UL login lets the monitor
+      Pick either method &mdash; signing in with your ULFG login lets the monitor
       renew its own cookie automatically.
     </p>
 
     <div class="mt-8 grid gap-8 md:grid-cols-2">
       <form method="post" class="space-y-4">
         {{ credentials_form.hidden_tag() }}
-        <h2 class="card-title">Register with UL login</h2>
+        <h2 class="card-title">Register with ULFG login</h2>
 
         <div>
           <label class="field-label">Username (for this site)</label>
@@ -20,15 +20,15 @@ block content %}
         </div>
         <div>
           <label class="field-label">Password (for this site)</label>
-          {{ credentials_form.password(class='input') }}
+          {{ credentials_form.password(class='input', autocomplete='new-password') }}
         </div>
         <div>
-          <label class="field-label">UL username</label>
+          <label class="field-label">ULFG username</label>
           {{ credentials_form.ul_username(class='input') }}
         </div>
         <div>
-          <label class="field-label">UL password</label>
-          {{ credentials_form.ul_password(class='input') }}
+          <label class="field-label">ULFG password</label>
+          {{ credentials_form.ul_password(class='input', autocomplete='off') }}
         </div>
 
         <label class="check-row items-start">
@@ -57,10 +57,10 @@ block content %}
         </div>
         <div>
           <label class="field-label">Password (for this site)</label>
-          {{ cookie_form.password(class='input') }}
+          {{ cookie_form.password(class='input', autocomplete='new-password') }}
         </div>
         <div>
-          <label class="field-label">UL cookie</label>
+          <label class="field-label">ULFG cookie</label>
           {{ cookie_form.ul_cookie(class='textarea') }}
         </div>
 

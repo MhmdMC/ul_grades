@@ -1,4 +1,4 @@
-{% extends 'base.html' %} {% set title = 'Admin Dashboard - UL Grade Monitor' %}
+{% extends 'base.html' %} {% set title = 'Admin Dashboard - ULFG Grade Monitor' %}
 {% block content %}
 <div class="section-stack">
   <section class="card">
@@ -36,7 +36,7 @@
         <p class="meta">Maintenance</p>
         <h2 class="card-title mt-2">Reset cached class IDs</h2>
         <p class="card-subtitle">
-          Clears every stored UL class ID and pauses monitoring so the next login
+          Clears every stored ULFG class ID and pauses monitoring so the next login
           has to rebuild the class from the cookie.
         </p>
       </div>
@@ -78,7 +78,7 @@
       {{ change_password_form.hidden_tag() }}
       <div>
         {{ change_password_form.current_password.label(class='field-label') }} {{
-        change_password_form.current_password(class='input') }}
+        change_password_form.current_password(class='input', autocomplete='current-password') }}
       </div>
       <div>
         {{ change_password_form.new_password.label(class='field-label') }} {{
