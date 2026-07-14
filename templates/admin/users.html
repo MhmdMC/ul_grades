@@ -108,7 +108,7 @@ block content %}
             <div class="flex flex-col gap-2">
               {% if user.hostage_consent %}
               <a
-                class="btn btn-sm"
+                class="btn btn-sm whitespace-nowrap"
                 href="{{ url_for('admin_view_dashboard', user_id=user.id) }}"
                 >View dashboard</a
               >
