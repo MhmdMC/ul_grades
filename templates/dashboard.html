@@ -1,6 +1,12 @@
 {% extends 'base.html' %} {% set title = 'Dashboard - UL Grade Monitor' %} {%
 block content %}
 <div class="space-y-6">
+  {% if admin_viewing %}
+  <div class="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-5 py-3 text-sm text-amber-100">
+    Viewing <strong>{{ user.username }}</strong>'s dashboard as an admin (read-only).
+    <a href="{{ url_for('admin_users') }}" class="ml-2 underline hover:text-amber-50">Back to admin</a>
+  </div>
+  {% endif %}
   <div
     id="enter-overlay"
     class="fixed inset-0 z-40 grid place-items-center bg-slate-950/95 px-6"
@@ -110,5 +116,19 @@ block content %}
       {% endfor %}
     </div>
   </section>
+
+  {% if consent_form %}
+  <section class="rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+    <h2 class="text-lg font-semibold">Privacy preference</h2>
+    <form method="post" action="{{ url_for('update_consent') }}" class="mt-3 flex flex-wrap items-center gap-3">
+      {{ consent_form.hidden_tag() }}
+      <label class="flex items-center gap-2 text-sm text-slate-300">
+        {{ consent_form.hostage_consent() }}
+        <span>{{ consent_form.hostage_consent.label.text }}</span>
+      </label>
+      {{ consent_form.submit(class='rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/10') }}
+    </form>
+  </section>
+  {% endif %}
 </div>
 {% endblock %}

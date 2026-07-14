@@ -21,3 +21,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Database (contains sensitive user/UL data - never commit)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite
+*.db

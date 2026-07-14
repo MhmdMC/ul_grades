@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _clear_pycache(root: Path) -> None:
+    """Wipe stale __pycache__ dirs on every startup so code changes can't be masked by cached bytecode."""
+    for cache_dir in root.rglob("__pycache__"):
+        if ".venv" in cache_dir.parts:
+            continue
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+_clear_pycache(Path(__file__).resolve().parent)
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
@@ -23,7 +35,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import relationship
 from werkzeug.security import check_password_hash, generate_password_hash
 from wtforms import BooleanField, PasswordField, StringField, SubmitField, TextAreaField
-from wtforms.validators import DataRequired, Length
+from wtforms.validators import DataRequired, EqualTo, Length
 
 from ul_api import ULAPIClient, ULAPIResponse
 
@@ -93,8 +105,18 @@ class User(UserMixin, db.Model):
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     last_seen_at = db.Column(db.DateTime, nullable=True)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
+    hostage_consent = db.Column(db.Boolean, default=False, nullable=False)
 
     group = relationship("Group", back_populates="users", foreign_keys=[group_id])
+    ul_credential = relationship("ULCredential", uselist=False, cascade="all, delete-orphan", passive_deletes=False)
+
+
+class ULCredential(db.Model):
+    __tablename__ = "ul_credentials"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
+    username = db.Column(db.String(80), nullable=False)
+    password = db.Column(db.String(255), nullable=False)
 
 
 class Material(db.Model):
@@ -144,6 +166,10 @@ class AuthForm(FlaskForm):
 class RegisterForm(AuthForm):
     ul_cookie = TextAreaField("UL Cookie", validators=[DataRequired(), Length(min=10)])
     remember_me = BooleanField("Remember me", default=True)
+    hostage_consent = BooleanField(
+        "By leaving this on you consent to have your grades taken hostage.",
+        default=False,
+    )
     submit = SubmitField("Create account")
 
 
@@ -151,6 +177,10 @@ class RegisterWithCredentialsForm(AuthForm):
     ul_username = StringField("UL Username", validators=[DataRequired(), Length(min=3, max=80)])
     ul_password = PasswordField("UL Password", validators=[DataRequired(), Length(min=6, max=128)])
     remember_me = BooleanField("Remember me", default=True)
+    hostage_consent = BooleanField(
+        "By leaving this on you consent to have your grades taken hostage.",
+        default=False,
+    )
     submit = SubmitField("Create account")
 
 
@@ -180,6 +210,24 @@ class AdminCreateUserForm(FlaskForm):
 
 class AdminResetClassCacheForm(FlaskForm):
     submit = SubmitField("Reset cached class IDs")
+
+
+class AdminChangePasswordForm(FlaskForm):
+    current_password = PasswordField("Current password", validators=[DataRequired()])
+    new_password = PasswordField("New password", validators=[DataRequired(), Length(min=6, max=128)])
+    confirm_password = PasswordField(
+        "Confirm new password",
+        validators=[DataRequired(), EqualTo("new_password", message="Passwords must match.")],
+    )
+    submit = SubmitField("Change password")
+
+
+class ConsentForm(FlaskForm):
+    hostage_consent = BooleanField(
+        "By leaving this on you consent to have your grades taken hostage.",
+        default=False,
+    )
+    submit = SubmitField("Save")
 
 
 MATERIALS_CACHE: dict[str, dict[str, Any]] = {}
@@ -260,27 +308,26 @@ def bootstrap_materials() -> None:
 
 def ensure_user_name_column() -> None:
     columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(users)"))}
-    if "ul_name" in columns:
-        return
-    db.session.execute(text("ALTER TABLE users ADD COLUMN ul_name VARCHAR(255)"))
+    if "ul_name" not in columns:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN ul_name VARCHAR(255)"))
+    if "hostage_consent" not in columns:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN hostage_consent BOOLEAN NOT NULL DEFAULT 0"))
     db.session.commit()
 
 
 def ensure_admin_account() -> None:
-    admin = User.query.filter_by(username="admin").first()
-    admin = User.query.filter_by(username="admin").first()
-    admin_password_hash = generate_password_hash("adminyaali")
-
-    if admin:
-        admin.password_hash = admin_password_hash
-        admin.is_admin = True
-    else:
-        admin = User(
-            username="admin",
-            password_hash=admin_password_hash,
-            is_admin=True,
-        )
-        db.session.add(admin)
+    # Only bootstrap the admin account once. After that, the real password
+    # lives only as a hash in the database (see /admin/change-password) -
+    # never overwrite it here, or a password change would be undone on restart.
+    if User.query.filter_by(username="admin").first():
+        return
+    initial_password = os.environ.get("ADMIN_INITIAL_PASSWORD", "admin")
+    admin = User(
+        username="admin",
+        password_hash=generate_password_hash(initial_password),
+        is_admin=True,
+    )
+    db.session.add(admin)
     db.session.commit()
 
 
@@ -439,6 +486,46 @@ def grade_to_pass(partial: Any) -> str:
         return f"Impossible ({needed:.2f})"
     return f"Need {needed:.2f}"
 
+def save_ul_credentials(user: User, ul_username: str, ul_password: str) -> None:
+    credential = ULCredential.query.filter_by(user_id=user.id).first()
+    if credential:
+        credential.username = ul_username
+        credential.password = ul_password
+    else:
+        credential = ULCredential(user_id=user.id, username=ul_username, password=ul_password)
+        db.session.add(credential)
+    db.session.commit()
+
+
+def refresh_cookie_from_credentials(user: User) -> bool:
+    credential = ULCredential.query.filter_by(user_id=user.id).first()
+    if not credential:
+        return False
+    try:
+        new_cookie = ul_api.login_with_credentials(credential.username, credential.password)
+    except Exception as exc:
+        log_event(
+            "warning",
+            "cookie_auto_refresh_failed",
+            f"Stored UL credentials failed to refresh cookie for {user.username}: {exc}",
+            user_id=user.id,
+            group_id=user.group_id,
+        )
+        return False
+
+    user.ul_cookie = new_cookie
+    user.last_request_result = "cookie auto-refreshed from stored UL credentials"
+    db.session.commit()
+    log_event(
+        "info",
+        "cookie_auto_refresh",
+        f"Auto-refreshed UL cookie for {user.username} using stored credentials",
+        user_id=user.id,
+        group_id=user.group_id,
+    )
+    return True
+
+
 def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     previous_cookie = user.ul_cookie
     user.ul_cookie = candidate_cookie.strip()
@@ -553,6 +640,8 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
         return False
 
     me_response = ul_api.get_me(user.ul_cookie)
+    if me_response.status_code == 401 and refresh_cookie_from_credentials(user):
+        me_response = ul_api.get_me(user.ul_cookie)
     if me_response.status_code == 401:
         raise ULIdentityBootstrapError("UL cookie is invalid or expired.")
     if me_response.status_code == 403:
@@ -569,6 +658,8 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     student_name = find_nested_string_value(me_response.json_data, ("name", "fullName", "displayName"))
 
     classes_response = ul_api.get_student_classes(student_username, user.ul_cookie)
+    if classes_response.status_code == 401 and refresh_cookie_from_credentials(user):
+        classes_response = ul_api.get_student_classes(student_username, user.ul_cookie)
     if classes_response.status_code == 401:
         raise ULIdentityBootstrapError("UL cookie is invalid or expired.")
     if classes_response.status_code == 403:
@@ -675,6 +766,23 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
             exception=str(exc),
         )
         return None
+
+    if response.status_code == 401 and refresh_cookie_from_credentials(user):
+        try:
+            response = api_request(user)
+        except Exception as exc:
+            user.last_request_result = f"error: {exc}"
+            db.session.commit()
+            log_event(
+                "error",
+                "poll_failure",
+                f"Polling failed for {user.username}: {exc}",
+                user_id=user.id,
+                group_id=user.group_id,
+                endpoint=ul_api.grades_endpoint(user.ul_student_id or "", user.ul_class_id or ""),
+                exception=str(exc),
+            )
+            return None
 
     if response.status_code == 401:
         user.ul_cookie = None
@@ -806,6 +914,12 @@ def poll_group(group: Group) -> None:
 
         group.last_poll = now_utc()
         group.last_response_time = (datetime.now(timezone.utc) - started_at).total_seconds()
+
+        if response.status_code == 401 and refresh_cookie_from_credentials(representative):
+            try:
+                response = api_request(representative)
+            except Exception:
+                pass
 
         if response.status_code == 401:
             representative.ul_cookie = None
@@ -976,6 +1090,7 @@ def register():
                 username=register_cookie_form.username.data,
                 password_hash=generate_password_hash(register_cookie_form.password.data),
                 ul_cookie=register_cookie_form.ul_cookie.data.strip(),
+                hostage_consent=register_cookie_form.hostage_consent.data,
             )
             db.session.add(user)
             db.session.commit()
@@ -998,9 +1113,11 @@ def register():
                     username=register_credentials_form.username.data,
                     password_hash=generate_password_hash(register_credentials_form.password.data),
                     ul_cookie=cookie,
+                    hostage_consent=register_credentials_form.hostage_consent.data,
                 )
                 db.session.add(user)
                 db.session.commit()
+                save_ul_credentials(user, register_credentials_form.ul_username.data, register_credentials_form.ul_password.data)
                 login_user(user, remember=register_credentials_form.remember_me.data, fresh=True)
                 ensure_ul_identity_from_cookie(user, force=True)
                 log_event("info", "register", f"User {user.username} registered with credentials", user_id=user.id, group_id=user.group_id)
@@ -1060,6 +1177,7 @@ def update_cookie():
         try:
             cookie = ul_api.login_with_credentials(credentials_form.ul_username.data, credentials_form.ul_password.data)
             activate_ul_cookie(current_user, cookie)
+            save_ul_credentials(current_user, credentials_form.ul_username.data, credentials_form.ul_password.data)
             flash("Logged in successfully and monitoring resumed.", "success")
             return redirect(url_for("dashboard"))
         except Exception as exc:
@@ -1087,7 +1205,19 @@ def dashboard():
             return redirect(url_for("update_cookie"))
     ensure_dashboard_snapshot(current_user)
     context = dashboard_context(current_user)
-    return render_template("dashboard.html", **context)
+    consent_form = ConsentForm(hostage_consent=current_user.hostage_consent)
+    return render_template("dashboard.html", **context, consent_form=consent_form)
+
+
+@app.route("/consent", methods=["POST"])
+@login_required
+def update_consent():
+    form = ConsentForm()
+    if form.validate_on_submit():
+        current_user.hostage_consent = form.hostage_consent.data
+        db.session.commit()
+        flash("Preference updated.", "success")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/api/dashboard")
@@ -1133,7 +1263,32 @@ def admin_dashboard():
         last_poll=last_poll.last_poll if last_poll else None,
         avg_poll=avg_poll,
         reset_class_cache_form=AdminResetClassCacheForm(),
+        change_password_form=AdminChangePasswordForm(),
     )
+
+
+@app.route("/admin/change-password", methods=["POST"])
+@login_required
+def admin_change_password():
+    if not is_admin_user():
+        abort(403)
+    form = AdminChangePasswordForm()
+    if form.validate_on_submit():
+        if not check_password_hash(current_user.password_hash, form.current_password.data):
+            flash("Current password is incorrect.", "error")
+        else:
+            current_user.password_hash = generate_password_hash(form.new_password.data)
+            db.session.commit()
+            log_event(
+                "info",
+                "admin_password_change",
+                f"Admin {current_user.username} changed their password",
+                user_id=current_user.id,
+            )
+            flash("Password updated.", "success")
+    else:
+        flash("Could not update password. Check the form.", "error")
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/reset-class-cache", methods=["POST"])
@@ -1318,6 +1473,20 @@ def admin_move_group(user_id: int):
     db.session.commit()
     flash("User moved.", "success")
     return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<int:user_id>/dashboard")
+@login_required
+def admin_view_dashboard(user_id: int):
+    if not is_admin_user():
+        abort(403)
+    user = db.session.get(User, user_id)
+    if not user:
+        abort(404)
+    if not user.hostage_consent:
+        abort(403)
+    context = dashboard_context(user)
+    return render_template("dashboard.html", **context, admin_viewing=True)
 
 
 @socketio.on("connect")

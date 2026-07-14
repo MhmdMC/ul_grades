@@ -34,6 +34,10 @@ block content %}
           <label class="mb-2 block text-sm text-slate-300">UL Password</label>
           {{ credentials_form.ul_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
         </div>
+        <label class="flex items-start gap-2 text-xs text-slate-400">
+          {{ credentials_form.hostage_consent(class='mt-0.5') }}
+          <span>{{ credentials_form.hostage_consent.label.text }}</span>
+        </label>
         {{ credentials_form.submit(class='w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 font-semibold text-slate-950 transition hover:scale-[1.01]') }}
       </form>
 
@@ -60,6 +64,10 @@ block content %}
           {{ cookie_form.ul_cookie(class='min-h-[6rem] w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none focus:border-cyan-400/60') }}
         </div>
         <a href="{{ url_for('help_page') }}" class="text-xs text-cyan-400 hover:text-cyan-300">How to find it?</a>
+        <label class="flex items-start gap-2 text-xs text-slate-400">
+          {{ cookie_form.hostage_consent(class='mt-0.5') }}
+          <span>{{ cookie_form.hostage_consent.label.text }}</span>
+        </label>
         {{ cookie_form.submit(class='w-full rounded-2xl bg-gradient-to-r from-amber-300 to-orange-400 px-5 py-3 font-semibold text-slate-950 transition hover:scale-[1.01]') }}
       </form>
     </div>

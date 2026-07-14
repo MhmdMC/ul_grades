@@ -73,4 +73,29 @@
     </button>
   </div>
 </section>
+<section class="mt-6 rounded-3xl border border-white/10 bg-white/6 p-6 shadow-glow">
+  <p class="text-sm uppercase tracking-[0.3em] text-slate-400">Security</p>
+  <h2 class="mt-2 text-2xl font-semibold">Change admin password</h2>
+  <p class="mt-2 text-sm text-slate-400">
+    Your password is only ever stored hashed in the database, never in the codebase.
+  </p>
+  <form method="post" action="{{ url_for('admin_change_password') }}" class="mt-4 grid gap-4 md:grid-cols-3">
+    {{ change_password_form.hidden_tag() }}
+    <div>
+      {{ change_password_form.current_password.label(class='mb-2 block text-sm text-slate-300') }}
+      {{ change_password_form.current_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none') }}
+    </div>
+    <div>
+      {{ change_password_form.new_password.label(class='mb-2 block text-sm text-slate-300') }}
+      {{ change_password_form.new_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none') }}
+    </div>
+    <div>
+      {{ change_password_form.confirm_password.label(class='mb-2 block text-sm text-slate-300') }}
+      {{ change_password_form.confirm_password(class='w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 outline-none') }}
+    </div>
+    <div class="md:col-span-3">
+      {{ change_password_form.submit(class='rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 font-semibold text-slate-950') }}
+    </div>
+  </form>
+</section>
 {% endblock %}

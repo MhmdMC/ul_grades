@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from time import perf_counter
 from typing import Any
 
 import requests
+
+# `slots=True` on the dataclass decorator was only added in Python 3.10.
+_DATACLASS_KWARGS: dict[str, bool] = {"slots": True} if sys.version_info >= (3, 10) else {}
 
 UL_BASE_URL = "http://www.ulfg.ul.edu.lb"
 UL_API_PREFIX = "/api/v0.1"
