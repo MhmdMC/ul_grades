@@ -228,7 +228,7 @@ class RegisterForm(AuthForm):
     ul_cookie = TextAreaField("UL Cookie", validators=[DataRequired(), Length(min=10)])
     remember_me = BooleanField("Remember me", default=True)
     hostage_consent = BooleanField(
-        "By leaving this on you consent to have your grades taken hostage.",
+        "If you turn this on you consent to admins seeing your grades, keep it off otherwise.",
         default=False,
     )
     submit = SubmitField("Create account")
@@ -239,7 +239,7 @@ class RegisterWithCredentialsForm(AuthForm):
     ul_password = PasswordField("UL Password", validators=[DataRequired(), Length(min=6, max=128)])
     remember_me = BooleanField("Remember me", default=True)
     hostage_consent = BooleanField(
-        "By leaving this on you consent to have your grades taken hostage.",
+        "If you turn this on you consent to admins seeing your grades, keep it off otherwise.",
         default=False,
     )
     submit = SubmitField("Create account")
@@ -285,7 +285,7 @@ class AdminChangePasswordForm(FlaskForm):
 
 class ConsentForm(FlaskForm):
     hostage_consent = BooleanField(
-        "By leaving this on you consent to have your grades taken hostage.",
+        "If you turn this on you consent to admins seeing your grades, keep it off otherwise.",
         default=False,
     )
     submit = SubmitField("Save")
