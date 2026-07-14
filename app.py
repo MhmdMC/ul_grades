@@ -919,6 +919,118 @@ def overall_field_values(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def leaderboard_metrics(class_id: str) -> list[dict[str, Any]]:
+    """Every rankable column for a class: the two averages, plus partial and final
+    for each material anyone in the class actually has."""
+    metrics: list[dict[str, Any]] = [
+        {"key": overall_share_key("partial_average"), "label": "Partial average", "group": "Overall"},
+        {"key": overall_share_key("final_average"), "label": "Final average", "group": "Overall"},
+    ]
+
+    user_ids = [user.id for user in User.query.filter_by(ul_class_id=str(class_id), is_admin=False).all()]
+    if not user_ids:
+        return metrics
+
+    material_ids = {grade.material_id for grade in Grade.query.filter(Grade.user_id.in_(user_ids)).all()}
+    materials = sorted(
+        ((material_id, material_lookup(material_id)) for material_id in material_ids),
+        key=lambda item: str(item[1]["name"]).lower(),
+    )
+    for material_id, lookup in materials:
+        for field, label in (("partial", "Partial"), ("final", "Final")):
+            metrics.append(
+                {
+                    "key": course_share_key(material_id, field),
+                    "label": f"{lookup['name']} - {label}",
+                    "group": lookup["name"],
+                }
+            )
+    return metrics
+
+
+def metric_value_for_user(user: User, metric_key: str) -> float | None:
+    if metric_key.startswith("overall:"):
+        field = metric_key.split(":", 1)[1]
+        average = GradeAverage.query.filter_by(user_id=user.id).first()
+        if average is None:
+            return None
+        return {"partial_average": average.partial_average, "final_average": average.final_average}.get(field)
+
+    if metric_key.startswith("course:"):
+        parts = metric_key.split(":", 2)
+        if len(parts) != 3:
+            return None
+        _, material_id, field = parts
+        grade = Grade.query.filter_by(user_id=user.id, material_id=material_id).first()
+        if grade is None:
+            return None
+        if field == "partial":
+            return grade.partial
+        if field == "final":
+            return grade.final_grade if grade.final_grade is not None else grade.final
+    return None
+
+
+def build_leaderboard(class_id: str, metric_key: str, viewer: User) -> list[dict[str, Any]]:
+    """Grades are always visible; the *name* attached to them is not.
+
+    A name is revealed only when the student published that exact grade. Admins
+    additionally see the names of students who consented to the hostage clause.
+    You always see your own row.
+    """
+    viewer_is_admin = bool(getattr(viewer, "is_admin", False))
+    students = User.query.filter_by(ul_class_id=str(class_id), is_admin=False).all()
+
+    rows: list[dict[str, Any]] = []
+    for student in students:
+        value = metric_value_for_user(student, metric_key)
+        if value is None:
+            continue
+
+        is_public = metric_key in public_keys_for(student)
+        is_self = student.id == viewer.id
+        revealed = is_public or is_self or (viewer_is_admin and student.hostage_consent)
+
+        if is_self:
+            reveal_reason = "you"
+        elif is_public:
+            reveal_reason = "public"
+        elif revealed:
+            reveal_reason = "consent"
+        else:
+            reveal_reason = None
+
+        rows.append(
+            {
+                "user": student if revealed else None,
+                "name": (student.ul_name or student.username) if revealed else "Anonymous",
+                "username": student.username if revealed else None,
+                "revealed": revealed,
+                "reveal_reason": reveal_reason,
+                "is_self": is_self,
+                "value": value,
+                "color": grade_color(value),
+                # A revealed name means that grade is already public, so linking
+                # to the profile exposes nothing new.
+                "profile_url": url_for("public_profile_page", username=student.username) if is_public else None,
+            }
+        )
+
+    rows.sort(key=lambda row: row["value"], reverse=True)
+
+    # Standard competition ranking: equal values share a rank.
+    previous_value = None
+    previous_rank = 0
+    for index, row in enumerate(rows, start=1):
+        if previous_value is not None and row["value"] == previous_value:
+            row["rank"] = previous_rank
+        else:
+            row["rank"] = index
+            previous_rank = index
+            previous_value = row["value"]
+    return rows
+
+
 def public_profile(user: User) -> dict[str, Any] | None:
     """Only the items this user explicitly marked public. Returns None if nothing is shared."""
     keys = public_keys_for(user)
@@ -1710,6 +1822,57 @@ def share_settings():
         overall_rows=overall_rows,
         course_rows=course_rows,
         public_count=len(keys),
+    )
+
+
+@app.route("/leaderboard")
+@login_required
+def leaderboard():
+    search = request.args.get("q", "").strip()
+
+    # Classes that actually have students to rank.
+    ranked_class_ids = {
+        row[0]
+        for row in db.session.query(User.ul_class_id)
+        .filter(User.ul_class_id.isnot(None), User.is_admin.is_(False))
+        .distinct()
+        .all()
+        if row[0]
+    }
+    classes = [{"class_id": class_id, "name": class_display_name(class_id)} for class_id in ranked_class_ids]
+    if search:
+        needle = search.lower()
+        classes = [item for item in classes if needle in item["name"].lower() or needle in str(item["class_id"])]
+    classes.sort(key=lambda item: item["name"])
+
+    selected_class_id = request.args.get("class_id") or ""
+    if not selected_class_id and not search and current_user.ul_class_id:
+        selected_class_id = str(current_user.ul_class_id)
+    if selected_class_id and selected_class_id not in ranked_class_ids:
+        selected_class_id = ""
+
+    metrics: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    selected_metric = ""
+
+    if selected_class_id:
+        metrics = leaderboard_metrics(selected_class_id)
+        valid_keys = {metric["key"] for metric in metrics}
+        selected_metric = request.args.get("metric") or overall_share_key("partial_average")
+        if selected_metric not in valid_keys:
+            selected_metric = overall_share_key("partial_average")
+        rows = build_leaderboard(selected_class_id, selected_metric, current_user)
+
+    return render_template(
+        "leaderboard.html",
+        search=search,
+        classes=classes,
+        selected_class_id=selected_class_id,
+        selected_class_name=class_display_name(selected_class_id) if selected_class_id else None,
+        metrics=metrics,
+        selected_metric=selected_metric,
+        rows=rows,
+        revealed_count=sum(1 for row in rows if row["revealed"]),
     )
 
 

@@ -96,10 +96,14 @@
           nav_item('admin_users', 'Users') }} {{ nav_item('admin_groups',
           'Groups') }}
           <span class="nav-sep"></span>
+          {{ nav_item('leaderboard', 'Leaderboard') }} {{
+          nav_item('public_directory', 'Public') }}
+          <span class="nav-sep"></span>
           <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
           {% else %} {{ nav_item('dashboard', 'Dashboard') }} {{
-          nav_item('share_settings', 'Sharing') }} {{
-          nav_item('public_directory', 'Public') }}
+          nav_item('leaderboard', 'Leaderboard') }} {{
+          nav_item('public_directory', 'Public') }} {{
+          nav_item('share_settings', 'Sharing') }}
           <span class="nav-sep"></span>
           <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
           {% endif %}

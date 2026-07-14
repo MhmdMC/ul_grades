@@ -1,0 +1,128 @@
+{% extends 'base.html' %} {% set title = 'Leaderboard - UL Grade Monitor' %} {%
+block content %}
+<div class="section-stack">
+  <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="max-w-2xl">
+        <p class="eyebrow">Leaderboard</p>
+        <h1 class="mt-2 text-3xl font-semibold">Class rankings</h1>
+        <p class="card-subtitle">
+          Grades are ranked anonymously. A name only appears when that student
+          published that exact grade{% if is_admin %}, or consented to the
+          hostage clause{% endif %}.
+        </p>
+      </div>
+      <form method="get" class="flex flex-wrap items-center gap-2">
+        <input
+          name="q"
+          value="{{ search }}"
+          placeholder="Search classes"
+          class="input w-60"
+        />
+        <button class="btn btn-primary">Search</button>
+      </form>
+    </div>
+  </section>
+
+  {% if classes %}
+  <section class="card">
+    <h2 class="card-title">Class</h2>
+    <div class="mt-4 flex flex-wrap gap-2">
+      {% for item in classes %}
+      <a
+        class="btn {{ 'btn-primary' if item.class_id == selected_class_id else '' }}"
+        href="{{ url_for('leaderboard', class_id=item.class_id, q=search) }}"
+      >
+        {{ item.name }}
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+  {% else %}
+  <div class="empty-state">
+    {% if search %} No class matches &ldquo;{{ search }}&rdquo;. {% else %} No
+    classes have any students to rank yet. {% endif %}
+  </div>
+  {% endif %} {% if selected_class_id %}
+  <section class="card">
+    <h2 class="card-title">Ranking by</h2>
+    <form method="get" class="mt-4 flex flex-wrap items-center gap-2">
+      <input type="hidden" name="class_id" value="{{ selected_class_id }}" />
+      <input type="hidden" name="q" value="{{ search }}" />
+      <select name="metric" class="select w-auto min-w-[18rem]">
+        {% for metric in metrics %}
+        <option
+          value="{{ metric.key }}"
+          {%
+          if
+          metric.key
+          ==
+          selected_metric
+          %}selected{%
+          endif
+          %}
+        >
+          {{ metric.label }}
+        </option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-primary">Show ranking</button>
+    </form>
+  </section>
+
+  <section class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th class="w-20">Rank</th>
+          <th>Student</th>
+          <th class="w-40">Grade</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="font-semibold">#{{ row.rank }}</td>
+          <td>
+            <div class="flex flex-wrap items-center gap-2">
+              {% if row.profile_url %}
+              <a
+                class="font-semibold text-cyan-200 hover:text-cyan-100"
+                href="{{ row.profile_url }}"
+                >{{ row.name }}</a
+              >
+              {% elif row.revealed %}
+              <span class="font-semibold">{{ row.name }}</span>
+              {% else %}
+              <span class="text-slate-400">Anonymous</span>
+              {% endif %} {% if row.is_self %}
+              <span class="badge badge-public">You</span>
+              {% elif row.reveal_reason == 'consent' %}
+              <span class="badge badge-muted">Consented</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="value-{{ row.color }} text-lg font-semibold">
+            {{ row.value }}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="3" class="text-center text-slate-400">
+            Nobody in this class has a grade for that yet.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if rows %}
+  <p class="text-sm text-slate-400">
+    {{ rows | length }} student{{ '' if rows | length == 1 else 's' }} ranked
+    &middot; {{ revealed_count }} name{{ '' if revealed_count == 1 else 's' }}
+    visible to you.
+  </p>
+  {% endif %} {% endif %}
+</div>
+{% endblock %}
