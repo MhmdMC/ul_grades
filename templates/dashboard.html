@@ -69,6 +69,20 @@ block content %}
         available' }}
       </p>
     </div>
+    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
+      <p class="text-sm text-slate-400">Final average</p>
+      <p id="final-average-value" class="mt-2 text-2xl font-semibold">
+        {{ snapshot.final_average if snapshot.final_average is not none else
+        'Not available' }}
+      </p>
+    </div>
+    <div class="rounded-3xl border border-white/10 bg-white/6 p-5 shadow-glow">
+      <p class="text-sm text-slate-400">Final rank</p>
+      <p id="final-rank-value" class="mt-2 text-2xl font-semibold">
+        {{ snapshot.final_rank if snapshot.final_rank is not none else 'Not
+        available' }}
+      </p>
+    </div>
   </section>
 
   <section>

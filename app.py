@@ -416,27 +416,36 @@ def normalize_snapshot(payload: Any) -> dict[str, Any]:
         student_name = find_nested_string_value(payload, ("student_name", "name", "fullName", "displayName"))
         student_id = payload.get("student_id") or payload.get("studentId")
         class_id = payload.get("class_id") or payload.get("classId")
-        average = payload.get("average")
-        if isinstance(average, dict):
-            average = average.get("partialAverage")
-        if average is None and isinstance(payload.get("average"), dict):
-            average = payload.get("average", {}).get("value")
-        overall_rank = payload.get("overall_rank") or payload.get("rank")
-        if isinstance(overall_rank, dict):
-            overall_rank = overall_rank.get("partialRank")
-        if overall_rank is None and isinstance(payload.get("average"), dict):
-            average_block = payload.get("average", {})
-            overall_rank = average_block.get("partialRank")
-            if overall_rank is None:
-                overall_rank = average_block.get("finalGradeRank")
-            if overall_rank is None:
-                overall_rank = average_block.get("value")
+        average_block = payload.get("average")
+        if not isinstance(average_block, dict):
+            average_block = {}
+
+        average = average_block.get("partialAverage")
+        if average is None:
+            average = average_block.get("value")
+
+        overall_rank = average_block.get("partialRank")
+        if overall_rank is None:
+            overall_rank = average_block.get("rank")
+
+        final_average = average_block.get("finalGradeAverage")
+        final_rank = average_block.get("finalGradeRank")
     else:
         student_name = None
         student_id = None
         class_id = None
         average = None
         overall_rank = None
+        final_average = None
+        final_rank = None
+
+    # UL's API reports 0 / 0.0 (instead of null) for the final average/rank
+    # before any final grades exist - treat that the same as "not available",
+    # same as a null finalGrade on an individual course.
+    if not final_average:
+        final_average = None
+    if not final_rank:
+        final_rank = None
 
     return {
         "student_name": student_name,
@@ -444,6 +453,8 @@ def normalize_snapshot(payload: Any) -> dict[str, Any]:
         "class_id": class_id,
         "average": average,
         "overall_rank": overall_rank,
+        "final_average": final_average,
+        "final_rank": final_rank,
         "courses": normalized_courses,
         "raw": payload,
     }
@@ -739,6 +750,8 @@ def emit_grade_change(user: User, changes: list[dict[str, Any]], snapshot: dict[
         "class_id": user.ul_class_id,
         "average": snapshot.get("average"),
         "overall_rank": snapshot.get("overall_rank"),
+        "final_average": snapshot.get("final_average"),
+        "final_rank": snapshot.get("final_rank"),
         "changes": changes,
         "courses": snapshot.get("courses", []),
         "timestamp": now_utc().isoformat(),
@@ -1236,6 +1249,10 @@ def dashboard_api():
             "student_id": current_user.ul_student_id,
             "class_id": current_user.ul_class_id,
             "group": context["group"].name if context["group"] else None,
+            "average": context["snapshot"].get("average"),
+            "overall_rank": context["snapshot"].get("overall_rank"),
+            "final_average": context["snapshot"].get("final_average"),
+            "final_rank": context["snapshot"].get("final_rank"),
             "courses": context["courses"],
             "updated_at": current_user.last_successful_poll.isoformat() if current_user.last_successful_poll else None,
         }
