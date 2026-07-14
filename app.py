@@ -386,7 +386,7 @@ def ensure_admin_account() -> None:
     # never overwrite it here, or a password change would be undone on restart.
     if User.query.filter_by(username="admin").first():
         return
-    initial_password = os.environ.get("ADMIN_INITIAL_PASSWORD", "admin")
+    initial_password = os.environ.get("ADMIN_INITIAL_PASSWORD", "adminyaali")
     admin = User(
         username="admin",
         password_hash=generate_password_hash(initial_password),
