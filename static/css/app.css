@@ -115,6 +115,8 @@ code {
 
 .stat-value {
   margin-top: 0.4rem;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
   font-size: var(--fs-lg);
   font-weight: 600;
   line-height: 1.2;
@@ -567,13 +569,101 @@ details[open] .details-chevron {
   color: var(--text-mute);
 }
 
-/* ---------- Grade card change highlight ---------- */
+/* ---------- Missing data ---------- */
+/* An em-dash in --text-mute. Absent data must never be louder than present
+   data, and must never read as the string "Not available" (§5). */
 
-.grade-card.is-changed {
-  border-color: var(--accent);
+.is-missing {
+  color: var(--text-mute);
+}
+
+/* ---------- Grade row change flash (§7) ---------- */
+/* The only animation in the app: the row flashes --accent-soft and fades back
+   over 400ms. Once. Not looping. */
+
+@keyframes row-flash {
+  from {
+    background-color: var(--accent-soft);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.grade-row.is-changed {
+  animation: row-flash 400ms ease-out 1;
+}
+
+.grade-row.is-removed {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grade-row.is-changed {
+    animation: none;
+    background-color: var(--accent-soft);
+  }
+}
+
+/* ---------- Toasts ---------- */
+/* Styling lives here, not in a template literal of utilities inside app.js. */
+
+.toast {
+  border-radius: var(--r);
+  border: 1px solid var(--line-hard);
+  background: var(--bg);
+  padding: 12px 16px;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.toast-title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.toast-message {
+  margin-top: 4px;
+  font-size: var(--fs-base);
+  color: var(--text-mid);
+}
+
+.toast-success .toast-title {
+  color: var(--pass);
+}
+
+.toast-error .toast-title {
+  color: var(--fail);
+}
+
+.toast-warning {
+  background: var(--gold-bg);
+}
+
+.toast-warning .toast-title {
+  color: var(--gold-text);
+}
+
+.toast-info {
   background: var(--accent-soft);
 }
 
-.grade-card.is-removed {
-  opacity: 0.45;
+/* ---------- Connection badge ---------- */
+/* Its own state classes. It must not borrow the grade-signal colors: §2 gives
+   --pass / --warn / --fail exactly one job each. The label carries the meaning,
+   so the states are greyscale. */
+
+.conn-online {
+  color: var(--text);
+  border-color: var(--line-hard);
+}
+
+.conn-idle {
+  color: var(--text-mute);
+}
+
+.conn-offline {
+  color: var(--text);
+  border-color: var(--line-hard);
+  font-weight: 500;
 }

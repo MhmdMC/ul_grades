@@ -29,8 +29,12 @@ block content %}
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p class="meta">Dashboard</p>
-        <h1 id="student-name" class="mt-2 text-lg font-semibold">
-          {{ user.ul_name or snapshot.student_name or 'Not available' }}
+        {% set student_name = user.ul_name or snapshot.student_name %}
+        <h1
+          id="student-name"
+          class="mt-2 text-lg font-semibold {{ 'is-missing' if not student_name }}"
+        >
+          {{ student_name if student_name else '—' }}
         </h1>
         <p class="card-subtitle">
           Student ID ending in
@@ -39,7 +43,7 @@ block content %}
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <span id="connection-status" class="badge badge-muted">
+        <span id="connection-status" class="badge conn-idle">
           Disconnected
         </span>
         {% if not admin_viewing %}
@@ -61,9 +65,9 @@ block content %}
       <p class="stat-label">{{ label }}</p>
       <p
         id="{{ stat_id }}"
-        class="stat-value {{ 'stat-display' if stat_id == 'stat-average' }}"
+        class="stat-value {{ 'stat-display' if stat_id == 'stat-average' }} {{ 'is-missing' if value is none }}"
       >
-        {{ value if value is not none else 'Not available' }}
+        {{ value if value is not none else '—' }}
       </p>
     </div>
     {% endfor %}
@@ -72,34 +76,62 @@ block content %}
   <section>
     <h2 class="card-title mb-3">Courses</h2>
     {% if courses %}
-    <div id="cards" class="grid gap-4 xl:grid-cols-2">
-      {% for course in courses %}
-      <article class="grade-card card" data-course-key="{{ course.key }}">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p class="text-lg font-semibold text-text">{{ course.name }}</p>
-            <p class="text-base text-text-mute">{{ course.code }}</p>
-          </div>
-          <span class="badge badge-muted">
-            Credits: {{ course.credits if course.credits is not none else 'N/A'
-            }}
-          </span>
-        </div>
-        <div class="mt-4 grid gap-3 sm:grid-cols-2">
-          {% for label, value, color in [ ('Partial grade', course.partial,
-          course.partial_color), ('Partial rank', course.partial_rank,
-          'neutral'), (course.final_label, course.final_value,
-          course.final_color), ('Final rank', course.final_rank, 'neutral') ] %}
-          <div class="stat">
-            <p class="stat-label">{{ label }}</p>
-            <p class="stat-value stat-value-sm value-{{ color }}">
-              {{ value if value is not none else 'Not available' }}
-            </p>
-          </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Course</th>
+            <th>Code</th>
+            <th class="num">Cr</th>
+            <th class="num">Partial</th>
+            <th class="num">Rank</th>
+            <th class="num">Final</th>
+            <th>To pass</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for course in courses %}
+          <tr class="grade-row" data-course-key="{{ course.key }}">
+            <td>{{ course.name }}</td>
+            <td>{{ course.code }}</td>
+
+            {% if course.credits is not none %}
+            <td class="num">{{ course.credits }}</td>
+            {% else %}
+            <td class="num is-missing">&mdash;</td>
+            {% endif %} {% if course.partial is not none %}
+            <td class="num value-{{ course.partial_color }}">
+              {{ course.partial }}
+            </td>
+            {% else %}
+            <td class="num is-missing">&mdash;</td>
+            {% endif %} {% if course.partial_rank is not none %}
+            <td class="num">{{ course.partial_rank }}</td>
+            {% else %}
+            <td class="num is-missing">&mdash;</td>
+            {% endif %}
+
+            {#- Final and To pass are mutually exclusive (§6): final_value holds a
+                number when final_label is "Final grade", and a text projection
+                otherwise. A column has one type, so they never merge. -#}
+            {% if course.final_label == 'Final grade' %}
+            <td class="num value-{{ course.final_color }}">
+              {{ course.final_value }}
+            </td>
+            <td class="is-missing">&mdash;</td>
+            {% elif course.final_value and course.final_value != 'Not Available' %}
+            <td class="num is-missing">&mdash;</td>
+            <td>{{ course.final_value }}</td>
+            {% else %}
+            {#- grade_to_pass() returns the literal "Not Available" when the
+                partial is not numeric. app.py is not refactored in this step. -#}
+            <td class="num is-missing">&mdash;</td>
+            <td class="is-missing">&mdash;</td>
+            {% endif %}
+          </tr>
           {% endfor %}
-        </div>
-      </article>
-      {% endfor %}
+        </tbody>
+      </table>
     </div>
     {% else %}
     <div class="empty-state">

@@ -9,10 +9,12 @@
   const studentName = document.getElementById("student-name");
   const testGradeSoundButton = document.getElementById("test-grade-sound");
   const copyCookieButtons = document.querySelectorAll(".copy-cookie-button");
-  const cards = new Map();
+  // The dashboard renders courses as table rows (§6). The live-update hooks
+  // live on the <tr>, not on a card.
+  const rows = new Map();
   document
-    .querySelectorAll(".grade-card")
-    .forEach((card) => cards.set(card.dataset.courseKey, card));
+    .querySelectorAll(".grade-row")
+    .forEach((row) => rows.set(row.dataset.courseKey, row));
 
   const socket = window.io
     ? window.io({ transports: ["websocket", "polling"] })
@@ -20,19 +22,21 @@
   let audioContext = null;
   let monitoringStarted = false;
 
+  // The connection badge has its own state classes. It must not borrow
+  // value-green / -orange / -red: those are grade signals, and §2 gives each
+  // signal exactly one job.
+  const CONN_CLASSES = ["badge-muted", "conn-online", "conn-idle", "conn-offline"];
+  const CONN_STATE = {
+    good: "conn-online",
+    warn: "conn-offline",
+    bad: "conn-offline",
+  };
+
   function setStatus(text, state = "normal") {
     if (!connectionStatus) return;
     connectionStatus.textContent = text;
-    connectionStatus.classList.remove(
-      "badge-muted",
-      "value-green",
-      "value-orange",
-      "value-red",
-    );
-    if (state === "good") connectionStatus.classList.add("value-green");
-    else if (state === "warn") connectionStatus.classList.add("value-orange");
-    else if (state === "bad") connectionStatus.classList.add("value-red");
-    else connectionStatus.classList.add("badge-muted");
+    connectionStatus.classList.remove(...CONN_CLASSES);
+    connectionStatus.classList.add(CONN_STATE[state] || "conn-idle");
   }
 
   function ensureAudioUnlocked() {
@@ -69,15 +73,28 @@
     beep(180, 660);
   }
 
+  const TOAST_KINDS = new Set(["success", "warning", "error", "info"]);
+
   function toast(title, message, kind = "info") {
     if (!toastRoot) return;
+    const variant = TOAST_KINDS.has(kind) ? kind : "info";
+
     const element = document.createElement("div");
-    element.className = `rounded-2xl border px-4 py-3 shadow-glow backdrop-blur-xl transition-all duration-300 ${kind === "success" ? "border-emerald-400/30 bg-emerald-400/10" : kind === "warning" ? "border-amber-400/30 bg-amber-400/10" : kind === "error" ? "border-rose-400/30 bg-rose-400/10" : "border-white/10 bg-slate-900/80"}`;
-    element.innerHTML = `<div class="text-sm font-semibold">${title}</div><div class="mt-1 text-sm text-slate-200/90">${message}</div>`;
+    element.className = `toast toast-${variant}`;
+
+    const titleNode = document.createElement("div");
+    titleNode.className = "toast-title";
+    titleNode.textContent = title;
+
+    const messageNode = document.createElement("div");
+    messageNode.className = "toast-message";
+    messageNode.textContent = message;
+
+    element.append(titleNode, messageNode);
     toastRoot.appendChild(element);
+
     setTimeout(() => {
       element.style.opacity = "0";
-      element.style.transform = "translateY(8px)";
       setTimeout(() => element.remove(), 300);
     }, 4000);
   }
@@ -101,20 +118,21 @@
   }
 
   function highlightCourse(courseKey, kind = "changed") {
-    const card = cards.get(courseKey);
-    if (!card) return;
-    card.classList.remove("is-changed", "is-removed");
-    void card.offsetWidth;
-    if (kind === "removed") card.classList.add("is-removed");
-    else card.classList.add("is-changed");
-    setTimeout(() => card.classList.remove("is-changed"), 4500);
+    const row = rows.get(courseKey);
+    if (!row) return;
+    row.classList.remove("is-changed", "is-removed");
+    void row.offsetWidth; // restart the flash if the row changes again
+    if (kind === "removed") row.classList.add("is-removed");
+    else row.classList.add("is-changed");
+    setTimeout(() => row.classList.remove("is-changed"), 4500);
   }
 
   function setStat(id, value) {
     const element = document.getElementById(id);
     if (!element) return;
-    element.textContent =
-      value === null || value === undefined ? "Not available" : value;
+    const missing = value === null || value === undefined;
+    element.textContent = missing ? "—" : value;
+    element.classList.toggle("is-missing", missing);
   }
 
   function updateDashboard(payload) {
