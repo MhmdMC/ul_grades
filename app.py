@@ -21,6 +21,8 @@ _clear_pycache(Path(__file__).resolve().parent)
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
+from crypto_utils import EncryptedText
 from flask_login import (
     LoginManager,
     UserMixin,
@@ -64,7 +66,11 @@ app.config.update(
     REMEMBER_COOKIE_HTTPONLY=True,
     REMEMBER_COOKIE_SAMESITE="Lax",
     REMEMBER_COOKIE_DURATION=timedelta(days=30),
+    SESSION_COOKIE_SECURE=os.environ.get("FORCE_HTTPS_COOKIES", "").lower() in ("1", "true", "yes"),
+    REMEMBER_COOKIE_SECURE=os.environ.get("FORCE_HTTPS_COOKIES", "").lower() in ("1", "true", "yes"),
 )
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
@@ -75,9 +81,6 @@ scheduler = BackgroundScheduler(daemon=True)
 
 
 def get_ip_address() -> str:
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        return xff.split(",")[0].strip()
     return request.remote_addr or "unknown"
 
 
@@ -125,7 +128,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     ul_student_id = db.Column(db.String(64), nullable=True)
     ul_class_id = db.Column(db.String(64), nullable=True)
-    ul_cookie = db.Column(db.Text, nullable=True)
+    ul_cookie = db.Column(EncryptedText(app.config["SECRET_KEY"]), nullable=True)
     group_id = db.Column(db.Integer, db.ForeignKey("groups.id"), nullable=True)
     last_successful_poll = db.Column(db.DateTime, nullable=True)
     last_request_result = db.Column(db.String(255), nullable=True)
@@ -149,7 +152,13 @@ class ULCredential(db.Model):
 
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
     username = db.Column(db.String(80), nullable=False)
-    password = db.Column(db.String(255), nullable=False)
+    password = db.Column(EncryptedText(app.config["SECRET_KEY"]), nullable=False)
+
+
+class EncryptionSentinel(db.Model):
+    __tablename__ = "encryption_sentinel"
+    id = db.Column(db.Integer, primary_key=True)
+    value = db.Column(db.Text, nullable=False)
 
 
 class Grade(db.Model):
@@ -324,14 +333,16 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def is_account_locked(username: str | None) -> bool:
+def is_account_locked(username: str | None, ip: str | None = None) -> bool:
     if not username:
         return False
     cutoff = now_utc() - timedelta(minutes=15)
-    recent = FailedLogin.query.filter(
+    query = FailedLogin.query.filter(
         FailedLogin.username == username, FailedLogin.created_at >= cutoff
-    ).count()
-    return recent >= 10
+    )
+    if ip:
+        query = query.filter(FailedLogin.ip_address == ip)
+    return query.count() >= 10
 
 
 def clear_failed_logins(username: str) -> None:
@@ -1306,6 +1317,8 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     group = ensure_group_for_class(latest_class_id, user)
     if student_name:
         user.ul_name = student_name
+    if str(user.ul_class_id or "") != str(latest_class_id):
+        user.last_snapshot = None
     user.ul_class_id = latest_class_id
     user.group_id = group.id
     user.updated_at = now_utc()
@@ -1379,7 +1392,7 @@ def emit_grade_change(user: User, changes: list[dict[str, Any]], snapshot: dict[
     socketio.emit("toast", {"title": "New grade detected", "message": summarize_change(changes), "kind": "success"}, to=f"user-{user.id}")
 
 
-def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
+def fetch_and_compare_user(user: User, is_first_group_poll: bool = False) -> dict[str, Any] | None:
     if not user.ul_cookie:
         return None
     started_at = now_utc()
@@ -1471,6 +1484,8 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
     old_snapshot = json.loads(user.last_snapshot) if user.last_snapshot else None
     changes = compare_snapshots(old_snapshot, snapshot)
 
+    has_existing_grades = Grade.query.filter_by(user_id=user.id).first() is not None
+
     user.last_snapshot = json.dumps(payload, ensure_ascii=False)
     user.last_successful_poll = now_utc()
     user.last_request_result = "ok"
@@ -1489,7 +1504,30 @@ def fetch_and_compare_user(user: User) -> dict[str, Any] | None:
         polling_duration=(now_utc() - started_at).total_seconds(),
     )
 
-    if changes:
+    import sys as _sys
+    print(f"[DEBUG] changes={len(changes) if changes else 0}", file=_sys.stderr)
+    print(f"[DEBUG] has_existing_grades={has_existing_grades}", file=_sys.stderr)
+    print(f"[DEBUG] old_snapshot={'EXISTS' if old_snapshot else 'NONE'}", file=_sys.stderr)
+    print(f"[DEBUG] group last_json={'<SET>' if (user.group_id and db.session.get(Group, user.group_id) and db.session.get(Group, user.group_id).last_json is not None) else '<NONE/NO-GROUP>'}", file=_sys.stderr)
+
+    should_skip = not changes
+    if changes and is_first_group_poll:
+        print(f"[DEBUG] >>> FIRST GROUP POLL — skipping alarm", file=_sys.stderr)
+        should_skip = True
+    if changes and not has_existing_grades:
+        print(f"[DEBUG] >>> NO GRADE ROWS — initial fetch, skipping alarm", file=_sys.stderr)
+        should_skip = True
+    if changes and has_existing_grades and old_snapshot is not None:
+        _old_keys = {c.get("key") for c in normalize_snapshot(old_snapshot).get("courses", [])}
+        _new_keys = {c.get("key") for c in snapshot.get("courses", [])}
+        if _old_keys & _new_keys:
+            print(f"[DEBUG] >>> keys overlap — real change in same class, NOT skipping", file=_sys.stderr)
+        else:
+            print(f"[DEBUG] >>> no key overlap — class change, skipping", file=_sys.stderr)
+            should_skip = True
+
+    if changes and not should_skip:
+        print(f"[DEBUG] >>> EMITTING GRADE CHANGE ALARM <<<", file=_sys.stderr)
         emit_grade_change(user, changes, snapshot)
         log_event(
             "info",
@@ -1620,13 +1658,15 @@ def poll_group(group: Group) -> None:
             db.session.commit()
             return
 
+        is_first_poll = group.last_json is None
         group.last_json = current_payload
         group.last_detected_change = now_utc()
         db.session.commit()
-        emit_status(group, f"Change detected for {group.name}. Verifying members.", "info")
+        if not is_first_poll:
+            emit_status(group, f"Change detected for {group.name}. Verifying members.", "info")
 
         for user in User.query.filter_by(group_id=group.id).all():
-            fetch_and_compare_user(user)
+            fetch_and_compare_user(user, is_first_group_poll=is_first_poll)
 
     finally:
         POLL_LOCK = False
@@ -1702,6 +1742,24 @@ def student_only(view):
         return view(*args, **kwargs)
 
     return wrapper
+
+
+from crypto_utils import encrypt as _encrypt_val
+
+def _encrypt_legacy_data() -> None:
+    from sqlalchemy import text
+    secret = app.config["SECRET_KEY"]
+    for table, pk, column in [("users", "id", "ul_cookie"), ("ul_credentials", "user_id", "password")]:
+        rows = db.session.execute(
+            text(f"SELECT {pk}, {column} FROM {table} WHERE {column} IS NOT NULL AND {column} NOT LIKE :p"),
+            {"p": "enc$%"},
+        ).fetchall()
+        for pk_val, val in rows:
+            db.session.execute(
+                text(f"UPDATE {table} SET {column} = :v WHERE {pk} = :pk"),
+                {"v": _encrypt_val(val, secret), "pk": pk_val},
+            )
+    db.session.commit()
 
 
 def backfill_stored_grades() -> None:
@@ -1829,7 +1887,7 @@ def login():
         username_input = form.username.data
         ip = get_ip_address()
 
-        if is_account_locked(username_input):
+        if is_account_locked(username_input, ip):
             log_event("warning", "login_locked", f"Locked account attempt for {username_input} from {ip}")
             flash("Account temporarily locked due to too many failed attempts. Try again later.", "error")
             return render_template("auth/login.html", form=form, show_ulfg_hint=False)
@@ -2455,7 +2513,21 @@ def join_dashboard_room():
 @socketio.on("request_refresh")
 def request_refresh():
     if current_user.is_authenticated:
-        socketio.emit("dashboard_payload", dashboard_context(current_user), to=f"user-{current_user.id}")
+        context = dashboard_context(current_user)
+        socketio.emit(
+            "dashboard_payload",
+            {
+                "student_name": current_user.ul_name or context["snapshot"].get("student_name"),
+                "student_id": current_user.ul_student_id,
+                "average": context["snapshot"].get("average"),
+                "overall_rank": context["snapshot"].get("overall_rank"),
+                "final_average": context["snapshot"].get("final_average"),
+                "final_rank": context["snapshot"].get("final_rank"),
+                "courses": context["courses"],
+                "updated_at": current_user.last_successful_poll.isoformat() if current_user.last_successful_poll else None,
+            },
+            to=f"user-{current_user.id}",
+        )
 
 
 @socketio.on("admin_test_alarm")
@@ -2497,11 +2569,15 @@ def start_background_services() -> None:
         scheduler.start()
 
 
+from crypto_utils import verify_or_seal as _verify_or_seal
+
 with app.app_context():
     db.create_all()
     ensure_user_name_column()
     bootstrap_materials()
     ensure_admin_account()
+    _encrypt_legacy_data()
+    _verify_or_seal(app, db)
     backfill_stored_grades()
     backfill_class_names()
     start_background_services()
