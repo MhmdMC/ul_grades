@@ -523,7 +523,9 @@ def class_display_name(class_id: str | None) -> str:
     if not class_id:
         return "Unassigned"
     record = db.session.get(SchoolClass, str(class_id))
-    return record.name if record else f"Class {class_id}"
+    # Never surface the raw class id in the UI; fall back to a neutral label
+    # until the class name is resolved from ULFG.
+    return record.name if record else "Unnamed class"
 
 
 def ensure_group_for_class(class_id: str | None, user: User | None = None) -> Group:
@@ -1751,7 +1753,7 @@ def touch_current_user() -> None:
 
 @app.context_processor
 def inject_globals() -> dict[str, Any]:
-    return {"now": now_utc(), "is_admin": is_admin_user()}
+    return {"now": now_utc(), "is_admin": is_admin_user(), "class_display_name": class_display_name}
 
 
 @app.route("/")

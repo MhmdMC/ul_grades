@@ -21,7 +21,7 @@ block content %}
           <option value="created_at" {% if sort == "created_at" %}selected{% endif %}>Created</option>
           <option value="username" {% if sort == "username" %}selected{% endif %}>Username</option>
           <option value="student_id" {% if sort == "student_id" %}selected{% endif %}>Student ID</option>
-          <option value="class_id" {% if sort == "class_id" %}selected{% endif %}>Class ID</option>
+          <option value="class_id" {% if sort == "class_id" %}selected{% endif %}>Class</option>
         </select>
         <button class="btn btn-primary">Filter</button>
       </form>
@@ -60,7 +60,7 @@ block content %}
         <tr>
           <th>Website username</th>
           <th>ULFG student id</th>
-          <th>Class id</th>
+          <th>Class</th>
           <th>Monitoring group</th>
           <th>ULFG cookie</th>
           <th>Hostage consent</th>
@@ -75,7 +75,9 @@ block content %}
         <tr>
           <td class="font-semibold">{{ user.username }}</td>
           <td>{{ user.ul_student_id or 'Not available' }}</td>
-          <td>{{ user.ul_class_id or 'Not available' }}</td>
+          <td title="{{ user.ul_class_id or '' }}">
+            {{ class_display_name(user.ul_class_id) if user.ul_class_id else 'Not available' }}
+          </td>
           <td>{{ user.group.name if user.group else 'Not available' }}</td>
           <td class="max-w-[240px]">
             <div class="flex items-center gap-2">
