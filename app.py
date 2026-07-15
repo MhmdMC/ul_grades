@@ -96,6 +96,10 @@ class SchoolClass(db.Model):
     major = db.Column(db.String(120), nullable=True)
     branch_number = db.Column(db.Integer, nullable=True)
     branch_name = db.Column(db.String(255), nullable=True)
+    # "english" or "french". ULFG splits every class into an English section and
+    # a non-English one; we normalize the latter to "french" regardless of what
+    # the API calls it.
+    language = db.Column(db.String(16), nullable=True)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -419,6 +423,10 @@ def ensure_user_name_column() -> None:
     group_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(groups)"))}
     if "class_id" not in group_columns:
         db.session.execute(text("ALTER TABLE groups ADD COLUMN class_id VARCHAR(64)"))
+
+    class_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(classes)"))}
+    if "language" not in class_columns:
+        db.session.execute(text("ALTER TABLE classes ADD COLUMN language VARCHAR(16)"))
     db.session.commit()
 
 
@@ -439,6 +447,16 @@ def ensure_admin_account() -> None:
 
 
 ORDINAL_HALVES = {"fall": "Fall", "spring": "Spring", "summer": "Summer", "winter": "Winter"}
+
+LANGUAGE_LABELS = {"english": "English", "french": "French"}
+
+
+def normalize_language(raw: Any) -> str | None:
+    """ULFG reports one section as "english"; every other section (french,
+    arabic, …) collapses to "french". A missing language stays unknown (None)."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    return "english" if str(raw).strip().lower() == "english" else "french"
 
 
 def build_class_name(payload: dict[str, Any]) -> str | None:
@@ -470,10 +488,12 @@ def ensure_class_record(class_id: str, user: User) -> SchoolClass | None:
         return None
 
     record = db.session.get(SchoolClass, str(class_id))
-    if record:
+    # A record with a known language is complete. If it predates the language
+    # column, fall through and re-resolve it (once) to backfill the language.
+    if record and record.language:
         return record
     if not user.ul_student_id or not user.ul_cookie:
-        return None
+        return record
 
     try:
         response = ul_api.get_current_class(user.ul_student_id, user.ul_cookie)
@@ -512,6 +532,7 @@ def ensure_class_record(class_id: str, user: User) -> SchoolClass | None:
     record.major = definition.get("major")
     record.branch_number = coerce_int(branch.get("number"))
     record.branch_name = branch.get("name")
+    record.language = normalize_language(payload.get("language"))
     record.updated_at = now_utc()
     db.session.commit()
 
@@ -519,13 +540,41 @@ def ensure_class_record(class_id: str, user: User) -> SchoolClass | None:
     return record
 
 
-def class_display_name(class_id: str | None) -> str:
+def class_base_name(class_id: str | None) -> str:
+    """The class name without its language segment (English/French share this)."""
     if not class_id:
         return "Unassigned"
     record = db.session.get(SchoolClass, str(class_id))
     # Never surface the raw class id in the UI; fall back to a neutral label
     # until the class name is resolved from ULFG.
     return record.name if record else "Unnamed class"
+
+
+def class_language(class_id: str | None) -> str | None:
+    if not class_id:
+        return None
+    record = db.session.get(SchoolClass, str(class_id))
+    return record.language if record else None
+
+
+def class_display_name(class_id: str | None) -> str:
+    """Base name with the language appended, e.g. 'Year 2 - Spring - Branch 3 - English'."""
+    base = class_base_name(class_id)
+    label = LANGUAGE_LABELS.get(class_language(class_id) or "")
+    return f"{base} - {label}" if label else base
+
+
+def languages_in_use() -> set[str]:
+    """Languages that actually have non-admin students, so a language filter can
+    stay data-driven and only appear when there is a real choice to make."""
+    class_ids = {
+        row[0]
+        for row in db.session.query(User.ul_class_id)
+        .filter(User.ul_class_id.isnot(None), User.is_admin.is_(False))
+        .distinct()
+        if row[0]
+    }
+    return {lang for lang in (class_language(cid) for cid in class_ids) if lang}
 
 
 def ensure_group_for_class(class_id: str | None, user: User | None = None) -> Group:
@@ -981,12 +1030,15 @@ OVERALL_SUBJECT = "overall"
 LEADERBOARD_KINDS: tuple[tuple[str, str], ...] = (("partial", "Partial"), ("final", "Final"))
 
 
-def leaderboard_subjects(class_id: str) -> list[dict[str, Any]]:
+def leaderboard_subjects(class_ids: list[str]) -> list[dict[str, Any]]:
     """What can be ranked in a class: the overall average, plus every material
-    anyone in the class actually has. Partial vs final is picked separately."""
+    anyone in the class actually has. Partial vs final is picked separately.
+
+    Accepts several class ids so an English + French "Both" view ranks together."""
     subjects: list[dict[str, Any]] = [{"id": OVERALL_SUBJECT, "name": "Overall average"}]
 
-    user_ids = [user.id for user in User.query.filter_by(ul_class_id=str(class_id), is_admin=False).all()]
+    ids = [str(c) for c in class_ids]
+    user_ids = [user.id for user in User.query.filter(User.ul_class_id.in_(ids), User.is_admin.is_(False)).all()]
     if not user_ids:
         return subjects
 
@@ -1032,7 +1084,7 @@ def metric_value_for_user(user: User, metric_key: str) -> float | None:
     return None
 
 
-def build_leaderboard(class_id: str, metric_key: str, viewer: User) -> list[dict[str, Any]]:
+def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> list[dict[str, Any]]:
     """Grades are always visible; the *name* attached to them is not.
 
     A name is revealed only when the student published that exact grade. Admins
@@ -1040,7 +1092,8 @@ def build_leaderboard(class_id: str, metric_key: str, viewer: User) -> list[dict
     You always see your own row.
     """
     viewer_is_admin = bool(getattr(viewer, "is_admin", False))
-    students = User.query.filter_by(ul_class_id=str(class_id), is_admin=False).all()
+    ids = [str(c) for c in class_ids]
+    students = User.query.filter(User.ul_class_id.in_(ids), User.is_admin.is_(False)).all()
 
     rows: list[dict[str, Any]] = []
     for student in students:
@@ -1155,8 +1208,11 @@ def viewable_profile(user: User, viewer: User) -> dict[str, Any] | None:
     }
 
 
-def search_students(query: str, limit: int = 40) -> list[dict[str, Any]]:
-    """Match on the last 4 digits of the ULFG id, or on the ULFG name."""
+def search_students(query: str, limit: int = 40, language: str = "both") -> list[dict[str, Any]]:
+    """Match on the last 4 digits of the ULFG id, or on the ULFG name.
+
+    When language is "english" or "french", only students in a class of that
+    language are returned (students whose class language is unknown are dropped)."""
     needle = query.strip().lower()
     if not needle:
         return []
@@ -1168,6 +1224,8 @@ def search_students(query: str, limit: int = 40) -> list[dict[str, Any]]:
         by_id = needle.isdigit() and needle in last4
         by_name = bool(student.ul_name) and needle in student.ul_name.lower()
         if not (by_id or by_name):
+            continue
+        if language in ("english", "french") and class_language(student.ul_class_id) != language:
             continue
         results.append(
             {
@@ -1740,7 +1798,10 @@ def backfill_class_names() -> None:
     resolved: set[str] = set()
     for user in users:
         class_id = str(user.ul_class_id)
-        if class_id in resolved or db.session.get(SchoolClass, class_id):
+        existing = db.session.get(SchoolClass, class_id)
+        # Skip classes already fully resolved; re-resolve ones missing a language
+        # (they predate the language column).
+        if class_id in resolved or (existing and existing.language):
             continue
         record = ensure_class_record(class_id, user)
         if record:
@@ -2058,16 +2119,60 @@ def leaderboard():
         .all()
         if row[0]
     }
-    classes = [{"class_id": class_id, "name": class_display_name(class_id)} for class_id in ranked_class_ids]
+    # Group real class ids by their (year, half, major, branch) identity so the
+    # English and French sections of the same class sit together and can be
+    # offered as a combined "Both".
+    LANG_ORDER = {"english": 0, "french": 1}
+    groups: dict[Any, list[str]] = {}
+    for class_id in ranked_class_ids:
+        record = db.session.get(SchoolClass, class_id)
+        if record and any((record.year, record.half, record.major, record.branch_number)):
+            key = (record.year, record.half, record.major, record.branch_number)
+        else:
+            # Unresolved class: keep it on its own so it never merges with others.
+            key = ("__solo__", class_id)
+        groups.setdefault(key, []).append(class_id)
+
+    classes: list[dict[str, Any]] = []
+    for cids in groups.values():
+        for class_id in sorted(cids):
+            classes.append(
+                {
+                    "class_id": class_id,
+                    "name": class_display_name(class_id),
+                    "_base": class_base_name(class_id),
+                    "_order": LANG_ORDER.get(class_language(class_id) or "", 2),
+                }
+            )
+        # Only offer "Both" when a class actually has more than one section.
+        if len(cids) > 1:
+            classes.append(
+                {
+                    "class_id": "both:" + "+".join(sorted(cids)),
+                    "name": f"{class_base_name(cids[0])} - Both",
+                    "_base": class_base_name(cids[0]),
+                    "_order": 3,
+                }
+            )
+
     if search:
         needle = search.lower()
         classes = [item for item in classes if needle in item["name"].lower() or needle in str(item["class_id"])]
-    classes.sort(key=lambda item: item["name"])
+    classes.sort(key=lambda item: (item["_base"].lower(), item["_order"]))
 
     selected_class_id = request.args.get("class_id") or ""
     if not selected_class_id and not search and current_user.ul_class_id:
         selected_class_id = str(current_user.ul_class_id)
-    if selected_class_id and selected_class_id not in ranked_class_ids:
+
+    # A selection is either a single real class id or a "both:a+b" token.
+    if selected_class_id.startswith("both:"):
+        selected_class_ids = [c for c in selected_class_id[len("both:"):].split("+") if c]
+    elif selected_class_id:
+        selected_class_ids = [selected_class_id]
+    else:
+        selected_class_ids = []
+    selected_class_ids = [c for c in selected_class_ids if c in ranked_class_ids]
+    if not selected_class_ids:
         selected_class_id = ""
 
     subjects: list[dict[str, Any]] = []
@@ -2075,8 +2180,8 @@ def leaderboard():
     selected_subject = OVERALL_SUBJECT
     selected_kind = "partial"
 
-    if selected_class_id:
-        subjects = leaderboard_subjects(selected_class_id)
+    if selected_class_ids:
+        subjects = leaderboard_subjects(selected_class_ids)
         valid_subjects = {subject["id"] for subject in subjects}
 
         selected_subject = request.args.get("subject") or OVERALL_SUBJECT
@@ -2089,14 +2194,21 @@ def leaderboard():
 
         metric_key = metric_key_for(selected_subject, selected_kind)
         if metric_key:
-            rows = build_leaderboard(selected_class_id, metric_key, current_user)
+            rows = build_leaderboard(selected_class_ids, metric_key, current_user)
+
+    if selected_class_id.startswith("both:"):
+        selected_class_name = f"{class_base_name(selected_class_ids[0])} - Both"
+    elif selected_class_id:
+        selected_class_name = class_display_name(selected_class_id)
+    else:
+        selected_class_name = None
 
     return render_template(
         "leaderboard.html",
         search=search,
         classes=classes,
         selected_class_id=selected_class_id,
-        selected_class_name=class_display_name(selected_class_id) if selected_class_id else None,
+        selected_class_name=selected_class_name,
         subjects=subjects,
         kinds=LEADERBOARD_KINDS,
         selected_subject=selected_subject,
@@ -2145,7 +2257,21 @@ def public_directory():
 @login_required
 def search_page():
     query = request.args.get("q", "").strip()
-    return render_template("public/search.html", search=query, results=search_students(query) if query else [])
+    language = request.args.get("lang", "both")
+    if language not in ("english", "french", "both"):
+        language = "both"
+    # Data-driven: only offer the language filter when both sections exist.
+    show_language_filter = len(languages_in_use()) >= 2
+    if not show_language_filter:
+        language = "both"
+    results = search_students(query, language=language) if query else []
+    return render_template(
+        "public/search.html",
+        search=query,
+        results=results,
+        language=language,
+        show_language_filter=show_language_filter,
+    )
 
 
 @app.route("/u/<username>")

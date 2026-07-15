@@ -19,9 +19,23 @@
           class="input w-64"
           autofocus
         />
+        <input type="hidden" name="lang" value="{{ language }}" />
         <button class="btn btn-primary">Search</button>
       </form>
     </div>
+
+    {% if show_language_filter %}
+    <div class="mt-4 flex flex-wrap gap-2">
+      {% for opt, label in [('english', 'English'), ('french', 'French'), ('both', 'Both')] %}
+      <a
+        class="btn {{ 'btn-primary' if language == opt else '' }}"
+        href="{{ url_for('search_page', q=search, lang=opt) }}"
+      >
+        {{ label }}
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
   </section>
 
   {% if not search %}
