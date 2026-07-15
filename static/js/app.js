@@ -22,9 +22,8 @@
   let audioContext = null;
   let monitoringStarted = false;
 
-  // The connection badge has its own state classes. It must not borrow
-  // value-green / -orange / -red: those are grade signals, and §2 gives each
-  // signal exactly one job.
+  // The connection badge has its own state classes. It must not borrow the
+  // grade colors: those signal grades, and §2 gives each signal exactly one job.
   const CONN_CLASSES = ["badge-muted", "conn-online", "conn-idle", "conn-offline"];
   const CONN_STATE = {
     good: "conn-online",

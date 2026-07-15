@@ -11,7 +11,7 @@
 {% elif item.value is none %}
 <td class="num is-missing">&mdash;</td>
 {% else %}
-<td class="num value-{{ item.color }}">{{ item.value }}</td>
+<td class="num" {% if item.color %}style="color: {{ item.color }}"{% endif %}>{{ item.value }}</td>
 {% endif %}
 {% endmacro %}
 

@@ -128,7 +128,7 @@ block content %}
               {% endif %}
             </div>
           </td>
-          <td class="num value-{{ row.color }} font-medium">
+          <td class="num font-medium" {% if row.color %}style="color: {{ row.color }}"{% endif %}>
             {{ row.value }}
           </td>
         </tr>

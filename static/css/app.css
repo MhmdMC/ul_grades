@@ -540,24 +540,9 @@ details[open] .details-chevron {
 }
 
 /* ---------- Grade values ---------- */
-/* Class names still say green/orange/red because app.py's grade_color() emits
-   them. Renaming to pass/warn/fail touches app.py, which is step 5. */
-
-.value-green {
-  color: var(--pass);
-}
-
-.value-orange {
-  color: var(--warn);
-}
-
-.value-red {
-  color: var(--fail);
-}
-
-.value-neutral {
-  color: var(--text);
-}
+/* Grade cells get their color inline, computed by app.py's grade_color() on a
+   continuous scale (dark red -> red below 60, yellow -> green from 60 to 80,
+   green above). There is no fixed class per bucket anymore. */
 
 /* Cosmetic only. The real value is never rendered for a hidden field, so there
    is nothing here for a reader to recover by removing the blur. */

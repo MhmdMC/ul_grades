@@ -101,7 +101,7 @@ block content %}
             {% else %}
             <td class="num is-missing">&mdash;</td>
             {% endif %} {% if course.partial is not none %}
-            <td class="num value-{{ course.partial_color }}">
+            <td class="num" {% if course.partial_color %}style="color: {{ course.partial_color }}"{% endif %}>
               {{ course.partial }}
             </td>
             {% else %}
@@ -116,7 +116,7 @@ block content %}
                 number when final_label is "Final grade", and a text projection
                 otherwise. A column has one type, so they never merge. -#}
             {% if course.final_label == 'Final grade' %}
-            <td class="num value-{{ course.final_color }}">
+            <td class="num" {% if course.final_color %}style="color: {{ course.final_color }}"{% endif %}>
               {{ course.final_value }}
             </td>
             {% if course.final_rank is not none %}
