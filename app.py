@@ -1824,6 +1824,7 @@ def register():
 @limiter.limit("5 per minute", methods=["POST"])
 def login():
     form = LoginForm()
+    show_ulfg_hint = False
     if form.validate_on_submit():
         username_input = form.username.data
         ip = get_ip_address()
@@ -1831,7 +1832,7 @@ def login():
         if is_account_locked(username_input):
             log_event("warning", "login_locked", f"Locked account attempt for {username_input} from {ip}")
             flash("Account temporarily locked due to too many failed attempts. Try again later.", "error")
-            return render_template("auth/login.html", form=form)
+            return render_template("auth/login.html", form=form, show_ulfg_hint=False)
 
         user = User.query.filter(
             or_(User.username == username_input, User.ul_student_id == username_input)
@@ -1851,6 +1852,7 @@ def login():
         if not user:
             db.session.add(FailedLogin(username=username_input, ip_address=ip))
             db.session.commit()
+            show_ulfg_hint = True
             log_event("warning", "login_failed", f"Failed login for {username_input} from {ip}", endpoint="/login")
             flash("Invalid username or password. You can also use your ULFG student ID and ULFG password.", "error")
         else:
@@ -1868,7 +1870,7 @@ def login():
             log_event("info", "login", f"User {user.username} logged in", user_id=user.id, group_id=user.group_id)
             next_url = request.args.get("next") or url_for("dashboard")
             return redirect(next_url)
-    return render_template("auth/login.html", form=form)
+    return render_template("auth/login.html", form=form, show_ulfg_hint=show_ulfg_hint)
 
 
 @app.route("/logout")

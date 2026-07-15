@@ -4,9 +4,11 @@ content %}
   <div class="card w-full max-w-md">
     <p class="meta">Welcome back</p>
     <h1 class="mt-2 text-lg font-semibold">Sign in to monitor grades</h1>
+    {% if show_ulfg_hint %}
     <p class="card-subtitle">
-      Forgot your site password? Just use your ULFG password &mdash; it will update automatically.
+      Forgot your site password? Just use your ULFG password.
     </p>
+    {% endif %}
 
     <form method="post" class="mt-6 space-y-4">
       {{ form.hidden_tag() }}
