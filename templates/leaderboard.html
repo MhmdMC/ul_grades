@@ -37,6 +37,7 @@ block content %}
       </a>
       {% endfor %}
     </div>
+
   </section>
   {% else %}
   <div class="empty-state">
@@ -91,6 +92,29 @@ block content %}
           {% endfor %}
         </select>
       </div>
+
+      {% if show_lang_filter %}
+      <div class="w-full sm:w-36">
+        <label class="field-label" for="lang">Section</label>
+        <select id="lang" name="lang" class="select">
+          {% for val, label in [('both', 'Both'), ('english', 'English'), ('french', 'French')] %}
+          <option
+            value="{{ val }}"
+            {%
+            if
+            val
+            ==
+            selected_lang
+            %}selected{%
+            endif
+            %}
+          >
+            {{ label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
 
       <button class="btn btn-primary">Show ranking</button>
     </form>

@@ -493,42 +493,56 @@ def build_class_name(payload: dict[str, Any]) -> str | None:
     return " - ".join(parts) if parts else None
 
 
-def ensure_class_record(class_id: str, user: User) -> SchoolClass | None:
-    """Resolve a class id to its real name. Only calls ULFG the first time we see the class."""
+def _class_payload_from_classes_list(classes_payload: Any, class_id: str) -> dict | None:
+    """Extract the matching class entry dict from a get_student_classes response."""
+    if not isinstance(classes_payload, list):
+        return None
+    for entry in classes_payload:
+        if not isinstance(entry, dict):
+            continue
+        entry_id = entry.get("classId") or (entry.get("class") or {}).get("id")
+        if entry_id is not None and str(entry_id) == str(class_id):
+            class_info = entry.get("class")
+            return class_info if isinstance(class_info, dict) else None
+    return None
+
+
+def ensure_class_record(class_id: str, user: User, payload: dict | None = None) -> SchoolClass | None:
+    """Resolve a class id to its real name from API data.
+
+    When *payload* is provided (the ``class`` dict from a classes-list entry) it is
+    used directly – no extra API call.  When *payload* is None the method fetches
+    the user's full class list from ULFG and picks the matching entry.
+    """
     if not class_id:
         return None
 
     record = db.session.get(SchoolClass, str(class_id))
-    # A record with a known language is complete. If it predates the language
-    # column, fall through and re-resolve it (once) to backfill the language.
     if record and record.language:
         return record
+
     if not user.ul_student_id or not user.ul_cookie:
         return record
 
-    try:
-        response = ul_api.get_current_class(user.ul_student_id, user.ul_cookie)
-    except Exception as exc:
-        log_event("warning", "class_lookup_failed", f"Class lookup failed for {class_id}: {exc}", user_id=user.id)
-        return None
+    # ── Obtain a class payload ──────────────────────────────────────────
+    if payload is None:
+        try:
+            classes_resp = ul_api.get_student_classes(user.ul_student_id, user.ul_cookie)
+        except Exception as exc:
+            log_event("warning", "class_lookup_failed", f"Class list fetch failed for {class_id}: {exc}", user_id=user.id)
+            return None
+        if classes_resp.status_code >= 400:
+            log_event("warning", "class_lookup_failed", f"Class list for {class_id} returned {classes_resp.status_code}", user_id=user.id)
+            return None
+        payload = _class_payload_from_classes_list(classes_resp.json_data, class_id)
+        if payload is None:
+            log_event("warning", "class_not_found_in_list", f"Class {class_id} not found in student's class list", user_id=user.id)
+            return None
 
-    if response.status_code >= 400 or not isinstance(response.json_data, dict):
-        log_event(
-            "warning",
-            "class_lookup_failed",
-            f"Class lookup for {class_id} returned {response.status_code}",
-            user_id=user.id,
-            endpoint=response.endpoint,
-            http_status=response.status_code,
-        )
-        return None
-
-    payload = response.json_data
     name = build_class_name(payload)
     if not name:
         return None
 
-    # Trust the id the API reports over the one we guessed from the classes list.
     resolved_id = str(payload.get("id") or class_id)
     record = db.session.get(SchoolClass, resolved_id)
     if record is None:
@@ -588,11 +602,11 @@ def languages_in_use() -> set[str]:
     return {lang for lang in (class_language(cid) for cid in class_ids) if lang}
 
 
-def ensure_group_for_class(class_id: str | None, user: User | None = None) -> Group:
+def ensure_group_for_class(class_id: str | None, user: User | None = None, class_payload: dict | None = None) -> Group:
     key = str(class_id) if class_id else None
 
     if user is not None and key:
-        ensure_class_record(key, user)
+        ensure_class_record(key, user, payload=class_payload)
 
     group = Group.query.filter_by(class_id=key).first() if key else None
     if group is None:
@@ -1385,10 +1399,12 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     if not latest_class_id:
         raise ULIdentityBootstrapError("ULFG classes response did not include any classes.")
 
+    class_payload = _class_payload_from_classes_list(classes_response.json_data, latest_class_id)
+
     previous_group = user.group
     # Set the student id first: resolving the class name is a per-student UL call.
     user.ul_student_id = student_username
-    group = ensure_group_for_class(latest_class_id, user)
+    group = ensure_group_for_class(latest_class_id, user, class_payload=class_payload)
     if student_name:
         user.ul_name = student_name
     if str(user.ul_class_id or "") != str(latest_class_id):
@@ -2178,9 +2194,7 @@ def leaderboard():
         if row[0]
     }
     # Group real class ids by their (year, half, major, branch) identity so the
-    # English and French sections of the same class sit together and can be
-    # offered as a combined "Both".
-    LANG_ORDER = {"english": 0, "french": 1}
+    # English and French sections of the same class sit together.
     groups: dict[Any, list[str]] = {}
     for class_id in ranked_class_ids:
         record = db.session.get(SchoolClass, class_id)
@@ -2191,47 +2205,69 @@ def leaderboard():
             key = ("__solo__", class_id)
         groups.setdefault(key, []).append(class_id)
 
+    # Build one merged class button per academic identity (no language split).
     classes: list[dict[str, Any]] = []
     for cids in groups.values():
-        for class_id in sorted(cids):
-            classes.append(
-                {
-                    "class_id": class_id,
-                    "name": class_display_name(class_id),
-                    "_base": class_base_name(class_id),
-                    "_order": LANG_ORDER.get(class_language(class_id) or "", 2),
-                }
-            )
-        # Only offer "Both" when a class actually has more than one section.
-        if len(cids) > 1:
-            classes.append(
-                {
-                    "class_id": "both:" + "+".join(sorted(cids)),
-                    "name": f"{class_base_name(cids[0])} - Both",
-                    "_base": class_base_name(cids[0]),
-                    "_order": 3,
-                }
-            )
+        sorted_cids = sorted(cids)
+        rep_id = sorted_cids[0]
+        classes.append({
+            "class_id": rep_id,
+            "name": class_base_name(rep_id),
+        })
 
     if search:
         needle = search.lower()
         classes = [item for item in classes if needle in item["name"].lower() or needle in str(item["class_id"])]
-    classes.sort(key=lambda item: (item["_base"].lower(), item["_order"]))
+    classes.sort(key=lambda item: item["name"].lower())
+
+    # Reverse map: any class_id → its group's sorted ids
+    class_id_to_group: dict[str, list[str]] = {}
+    for cids in groups.values():
+        sorted_cids = sorted(cids)
+        for cid in sorted_cids:
+            class_id_to_group[cid] = sorted_cids
+
+    # Resolve selection
+    selected_lang = request.args.get("lang", "both")
+    if selected_lang not in ("english", "french", "both"):
+        selected_lang = "both"
 
     selected_class_id = request.args.get("class_id") or ""
-    if not selected_class_id and not search and current_user.ul_class_id:
-        selected_class_id = str(current_user.ul_class_id)
-
-    # A selection is either a single real class id or a "both:a+b" token.
+    # Legacy support for old "both:" URLs
     if selected_class_id.startswith("both:"):
-        selected_class_ids = [c for c in selected_class_id[len("both:"):].split("+") if c]
-    elif selected_class_id:
-        selected_class_ids = [selected_class_id]
-    else:
-        selected_class_ids = []
-    selected_class_ids = [c for c in selected_class_ids if c in ranked_class_ids]
-    if not selected_class_ids:
+        parts = selected_class_id[len("both:"):].split("+")
+        if parts:
+            return redirect(url_for("leaderboard", class_id=parts[0], q=search))
         selected_class_id = ""
+
+    if not selected_class_id and not search and current_user.ul_class_id:
+        uid = str(current_user.ul_class_id)
+        selected_class_id = (class_id_to_group.get(uid) or [uid])[0]
+    elif selected_class_id:
+        # Normalize to the group representative so button highlighting works.
+        cids = class_id_to_group.get(selected_class_id)
+        if cids is not None:
+            selected_class_id = cids[0]
+
+    selected_class_ids: list[str] = []
+    if selected_class_id:
+        cids = class_id_to_group.get(selected_class_id, [selected_class_id])
+        if selected_lang == "english":
+            selected_class_ids = [c for c in cids if class_language(c) == "english"]
+        elif selected_lang == "french":
+            selected_class_ids = [c for c in cids if class_language(c) == "french"]
+        else:
+            selected_class_ids = cids
+        selected_class_ids = [c for c in selected_class_ids if c in ranked_class_ids]
+        if not selected_class_ids:
+            selected_class_id = ""
+
+    # Only show the Section filter when the class has both English and French.
+    show_lang_filter = False
+    if selected_class_id and selected_class_id in class_id_to_group:
+        cids = class_id_to_group[selected_class_id]
+        langs = {class_language(c) for c in cids}
+        show_lang_filter = len(langs) >= 2
 
     subjects: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
@@ -2254,10 +2290,16 @@ def leaderboard():
         if metric_key:
             rows = build_leaderboard(selected_class_ids, metric_key, current_user)
 
-    if selected_class_id.startswith("both:"):
-        selected_class_name = f"{class_base_name(selected_class_ids[0])} - Both"
+    # Selected class display name (with language suffix when filtering)
+    if selected_class_id and selected_class_id in class_id_to_group:
+        cids = class_id_to_group[selected_class_id]
+        base = class_base_name(cids[0])
+        if show_lang_filter and selected_lang != "both":
+            selected_class_name = f"{base} - {selected_lang.title()}"
+        else:
+            selected_class_name = base
     elif selected_class_id:
-        selected_class_name = class_display_name(selected_class_id)
+        selected_class_name = class_base_name(selected_class_id)
     else:
         selected_class_name = None
 
@@ -2267,6 +2309,8 @@ def leaderboard():
         classes=classes,
         selected_class_id=selected_class_id,
         selected_class_name=selected_class_name,
+        selected_lang=selected_lang,
+        show_lang_filter=show_lang_filter,
         subjects=subjects,
         kinds=LEADERBOARD_KINDS,
         selected_subject=selected_subject,
@@ -2285,28 +2329,38 @@ def public_directory():
 
     users = User.query.filter(User.id.in_(shared_user_ids)).order_by(User.username.asc()).all()
 
-    # Bucket every sharing student under the class they belong to.
-    buckets: dict[str | None, list[dict[str, Any]]] = {}
+    # Group students by base class identity, split by language within each group.
+    merged: dict[Any, dict[str, Any]] = {}
     for user in users:
         profile = public_profile(user)
         if not profile:
             continue
-        buckets.setdefault(user.ul_class_id, []).append(
-            {
-                "user": user,
-                "course_count": len(profile["courses"]),
-                "overall_count": len(profile["overall"]),
-            }
-        )
+        cid = user.ul_class_id
+        record = db.session.get(SchoolClass, cid) if cid else None
+        if record and any((record.year, record.half, record.major, record.branch_number)):
+            key = (record.year, record.half, record.major, record.branch_number)
+            name = record.name
+        else:
+            key = ("__solo__", cid or "none")
+            name = class_base_name(cid)
 
-    classes = [
-        {
-            "class_id": class_id,
-            "name": class_display_name(class_id),
-            "students": sorted(entries, key=lambda entry: entry["user"].username.lower()),
-        }
-        for class_id, entries in buckets.items()
-    ]
+        entry = {"user": user, "course_count": len(profile["courses"]), "overall_count": len(profile["overall"])}
+
+        if key not in merged:
+            merged[key] = {"name": name, "english": [], "french": []}
+
+        lang = class_language(cid)
+        if lang == "english":
+            merged[key]["english"].append(entry)
+        else:
+            merged[key]["french"].append(entry)
+
+    classes = []
+    for data in merged.values():
+        data["english"].sort(key=lambda e: e["user"].username.lower())
+        data["french"].sort(key=lambda e: e["user"].username.lower())
+        classes.append(data)
+
     classes.sort(key=lambda item: item["name"])
     return render_template("public/directory.html", classes=classes)
 

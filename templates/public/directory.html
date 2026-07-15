@@ -13,6 +13,7 @@ block content %}
   {% if classes %}
   <div class="section-stack">
     {% for school_class in classes %}
+    {% set total = (school_class.english | length) + (school_class.french | length) %}
     <details class="card" {% if classes | length == 1 %}open{% endif %}>
       <summary
         class="flex cursor-pointer flex-wrap items-center justify-between gap-3 list-none"
@@ -20,8 +21,7 @@ block content %}
         <div>
           <h2 class="card-title">{{ school_class.name }}</h2>
           <p class="card-subtitle">
-            {{ school_class.students | length }} student{{ '' if
-            school_class.students | length == 1 else 's' }} sharing
+            {{ total }} student{{ '' if total == 1 else 's' }} sharing
           </p>
         </div>
         <span class="badge badge-public">
@@ -29,8 +29,9 @@ block content %}
         </span>
       </summary>
 
+      {% if school_class.english %}
       <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {% for entry in school_class.students %}
+        {% for entry in school_class.english %}
         <a
           class="stat block transition hover:border-line-hard"
           href="{{ url_for('public_profile_page', username=entry.user.username) }}"
@@ -54,6 +55,39 @@ block content %}
         </a>
         {% endfor %}
       </div>
+      {% endif %}
+
+      {% if school_class.english and school_class.french %}
+      <div class="my-4 border-t border-line-hard"></div>
+      {% endif %}
+
+      {% if school_class.french %}
+      <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {% for entry in school_class.french %}
+        <a
+          class="stat block transition hover:border-line-hard"
+          href="{{ url_for('public_profile_page', username=entry.user.username) }}"
+        >
+          <p class="font-semibold">
+            {{ entry.user.ul_name or entry.user.username }}
+          </p>
+          <p class="stat-label">@{{ entry.user.username }}</p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            {% if entry.course_count %}
+            <span class="badge badge-public">
+              {{ entry.course_count }} course{{ '' if entry.course_count == 1
+              else 's' }}
+            </span>
+            {% endif %} {% if entry.overall_count %}
+            <span class="badge badge-public">
+              {{ entry.overall_count }} overall
+            </span>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
     </details>
     {% endfor %}
   </div>
