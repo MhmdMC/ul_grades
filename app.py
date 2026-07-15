@@ -795,16 +795,30 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     return response
 
 
-def grade_color(value: Any) -> str:
+def grade_color(value: Any) -> str | None:
+    """A continuous CSS color for a grade. Returns None when the value is not a
+    number, so callers/templates fall back to the default text color.
+
+    A failing grade is always red: 0..60 runs dark red -> red. At 60 the scale
+    jumps to yellow, eases yellow -> green across 60..80, then stays green above
+    80. The break at 60 is deliberate — nothing at or above the pass mark is red.
+    """
     try:
         number = float(value)
     except Exception:
-        return "neutral"
-    if number >= 85:
-        return "green"
-    if number >= 70:
-        return "orange"
-    return "red"
+        return None
+    number = max(0.0, min(100.0, number))
+
+    if number < 60:
+        # Dark red -> red as the grade climbs toward the pass mark.
+        t = number / 60
+        hue, sat, light = 0, 72, 30 + 18 * t
+    else:
+        # Yellow (60) -> green (80+); held green above 80.
+        t = (min(number, 80) - 60) / 20
+        hue, sat, light = 55 + 85 * t, 75, 44 - 11 * t
+
+    return f"hsl({hue:.0f} {sat:.0f}% {light:.0f}%)"
 
 
 # Every individually shareable item. Each (field, label) pair becomes one
@@ -1120,7 +1134,7 @@ def viewable_profile(user: User, viewer: User) -> dict[str, Any] | None:
                     "label": label,
                     "visible": visible,
                     "value": value,
-                    "color": grade_color(value) if visible and field in ("partial", "final") else "neutral",
+                    "color": grade_color(value) if visible and field in ("partial", "final") else None,
                 }
             )
         courses.append({"code": course.get("course_code"), "name": course.get("course_name"), "fields": fields})
@@ -1191,7 +1205,7 @@ def public_profile(user: User) -> dict[str, Any] | None:
             {
                 "label": label,
                 "value": course_values.get(field),
-                "color": grade_color(course_values.get(field)) if field in ("partial", "final") else "neutral",
+                "color": grade_color(course_values.get(field)) if field in ("partial", "final") else None,
             }
             for field, label in COURSE_SHARE_FIELDS
             if course_share_key(course["key"], field) in keys
@@ -1667,7 +1681,7 @@ def dashboard_context(user: User) -> dict[str, Any]:
                 "partial_color": grade_color(course.get("partial")),
                 "final_label": "Final grade" if final_grade is not None else "Grade to pass",
                 "final_value": final_grade if final_grade is not None else grade_to_pass(course.get("partial")),
-                "final_color": grade_color(final_grade) if final_grade is not None else "neutral",
+                "final_color": grade_color(final_grade) if final_grade is not None else None,
                 # UL sends 0 instead of null for a final rank that does not exist yet.
                 "final_rank": course.get("final_rank") or None,
             }
