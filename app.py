@@ -1843,8 +1843,26 @@ def poll_group(group: Group) -> None:
         POLL_LOCK = False
 
 
+def _polling_blocked() -> bool:
+    """Return True when the scheduled poll cycle should be skipped.
+
+    Checks two things:
+      1. Admin pause toggle via the ``polling_paused`` setting.
+      2. Active hours (UTC 02:00 – 14:59) – polling only runs inside this
+         window.  On-demand fetches (first login, dashboard refresh, …)
+         are *not* affected – only the background scheduler.
+    """
+    setting = Setting.query.filter_by(key="polling_paused").first()
+    if setting and setting.value.lower() in ("1", "true", "yes"):
+        return True
+    hour = now_utc().hour
+    return not (2 <= hour < 15)
+
+
 def poll_all_groups() -> None:
     with app.app_context():
+        if _polling_blocked():
+            return
         for group in Group.query.order_by(Group.id.asc()).all():
             poll_group(group)
 
@@ -2595,6 +2613,11 @@ def admin_dashboard():
     online_users = User.query.filter(User.last_seen_at >= online_cutoff).count()
     groups = Group.query.count()
     requests_per_minute = Setting.query.filter_by(key="requests_per_minute").first()
+
+    pause_setting = Setting.query.filter_by(key="polling_paused").first()
+    polling_paused = pause_setting is not None and pause_setting.value.lower() in ("1", "true", "yes")
+    quiet_hours_active = 2 <= now_utc().hour < 15
+
     last_poll = Group.query.order_by(Group.last_poll.desc().nullslast()).first()
     avg_poll = db.session.query(func.avg(Group.last_response_time)).scalar() or 0
     return render_template(
@@ -2605,9 +2628,34 @@ def admin_dashboard():
         rpm=requests_per_minute.value if requests_per_minute else "0",
         last_poll=last_poll.last_poll if last_poll else None,
         avg_poll=avg_poll,
+        polling_paused=polling_paused,
+        quiet_hours_active=quiet_hours_active,
+        polling_interval=POLL_INTERVAL_SECONDS,
         reset_class_cache_form=AdminResetClassCacheForm(),
         change_password_form=AdminChangePasswordForm(),
     )
+
+
+@app.route("/admin/toggle-polling", methods=["POST"])
+@login_required
+def admin_toggle_polling():
+    if not is_admin_user():
+        abort(403)
+    setting = Setting.query.filter_by(key="polling_paused").first()
+    if setting and setting.value.lower() in ("1", "true", "yes"):
+        setting.value = "false"
+        log_event("info", "polling_resumed", "Admin resumed global polling")
+        flash("Polling resumed.", "success")
+    else:
+        if not setting:
+            setting = Setting(key="polling_paused", value="true")
+            db.session.add(setting)
+        else:
+            setting.value = "true"
+        log_event("info", "polling_paused", "Admin paused global polling")
+        flash("Polling paused.", "success")
+    db.session.commit()
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/change-password", methods=["POST"])

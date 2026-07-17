@@ -64,6 +64,39 @@
   </section>
 
   <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="max-w-xl">
+        <p class="meta">Polling</p>
+        <h2 class="card-title mt-2">
+          {% if polling_paused %}
+          <span class="text-status-warning">&#9679; Paused by admin</span>
+          {% elif quiet_hours_active %}
+          <span class="text-text-mute">&#9679; Outside active hours</span>
+          {% else %}
+          <span class="text-status-success">&#9679; Running</span>
+          {% endif %}
+        </h2>
+        <p class="card-subtitle">
+          {% if polling_paused %}
+          The background scheduler will not poll any group until you resume it.
+          On-demand fetches (first login, dashboard refresh) still work.
+          {% elif quiet_hours_active %}
+          Periodic polling only runs between 02:00 and 15:00 UTC.
+          {% else %}
+          Groups are being polled every {{ polling_interval }} seconds.
+          {% endif %}
+        </p>
+      </div>
+      <form method="post" action="{{ url_for('admin_toggle_polling') }}">
+        {{ change_password_form.hidden_tag() }}
+        <button class="btn {% if polling_paused %}btn-primary{% else %}btn-warn{% endif %}">
+          {{ 'Resume' if polling_paused else 'Pause' }}
+        </button>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
     <p class="meta">Security</p>
     <h2 class="card-title mt-2">Change admin password</h2>
     <p class="card-subtitle">
