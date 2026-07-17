@@ -929,6 +929,50 @@ def overall_share_key(field: str) -> str:
     return f"overall:{field}"
 
 
+# A grade and its rank are shared together: publish both or neither. Each toggle
+# on the sharing page is a (grade field, rank field, label) group; ticking it
+# publishes the grade key and its rank partner as one unit.
+COURSE_SHARE_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("partial", "partial_rank", "Partial"),
+    ("final", "final_rank", "Final"),
+)
+OVERALL_SHARE_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("partial_average", "partial_rank", "Partial"),
+    ("final_average", "final_rank", "Final"),
+)
+
+# Grade field -> the rank field it is coupled with, used to expand a submitted
+# grade key into the full pair regardless of subject.
+_GRADE_TO_RANK_FIELD: dict[str, str] = {
+    grade: rank for grade, rank, _ in (*COURSE_SHARE_GROUPS, *OVERALL_SHARE_GROUPS)
+}
+
+
+def rank_partner_key(grade_key: str) -> str | None:
+    """The rank share key coupled with a grade share key, or None if the key is
+    not a grade key (e.g. it is already a rank key)."""
+    if grade_key.startswith("overall:"):
+        rank = _GRADE_TO_RANK_FIELD.get(grade_key.split(":", 1)[1])
+        return overall_share_key(rank) if rank else None
+    if grade_key.startswith("course:"):
+        parts = grade_key.split(":", 2)
+        if len(parts) == 3:
+            rank = _GRADE_TO_RANK_FIELD.get(parts[2])
+            return course_share_key(parts[1], rank) if rank else None
+    return None
+
+
+def coupled_share_keys(selected: set[str]) -> set[str]:
+    """Given the grade keys ticked on the sharing page, add each one's rank
+    partner so grade and rank can never be published apart."""
+    result = set(selected)
+    for key in selected:
+        partner = rank_partner_key(key)
+        if partner:
+            result.add(partner)
+    return result
+
+
 def coerce_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -1119,6 +1163,32 @@ def metric_value_for_user(user: User, metric_key: str) -> float | None:
     return None
 
 
+def metric_rank_for_user(user: User, metric_key: str) -> int | None:
+    """The student's official ULFG rank for the metric a leaderboard column ranks
+    by. Mirrors metric_value_for_user, but returns the rank that travels with the
+    grade rather than the grade itself."""
+    if metric_key.startswith("overall:"):
+        field = metric_key.split(":", 1)[1]
+        average = GradeAverage.query.filter_by(user_id=user.id).first()
+        if average is None:
+            return None
+        return {"partial_average": average.partial_rank, "final_average": average.final_rank}.get(field)
+
+    if metric_key.startswith("course:"):
+        parts = metric_key.split(":", 2)
+        if len(parts) != 3:
+            return None
+        _, material_id, field = parts
+        grade = Grade.query.filter_by(user_id=user.id, material_id=material_id).first()
+        if grade is None:
+            return None
+        if field == "partial":
+            return grade.partial_rank
+        if field == "final":
+            return grade.final_rank
+    return None
+
+
 def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> list[dict[str, Any]]:
     """Grades are always visible; the *name* attached to them is not.
 
@@ -1158,6 +1228,7 @@ def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> li
                 "reveal_reason": reveal_reason,
                 "is_self": is_self,
                 "value": value,
+                "ul_rank": metric_rank_for_user(student, metric_key),
                 "color": grade_color(value),
                 # A revealed name means that grade is already public, so linking
                 # to the profile exposes nothing new.
@@ -2217,7 +2288,9 @@ def update_consent():
 @student_only
 def share_settings():
     if request.method == "POST":
-        requested = set(request.form.getlist("public"))
+        # The form only submits grade keys; each drags its rank partner along so
+        # the two are always published together.
+        requested = coupled_share_keys(set(request.form.getlist("public")))
         set_public_keys(current_user, requested & allowed_share_keys(current_user))
         flash("Sharing preferences saved.", "success")
         return redirect(url_for("share_settings"))
@@ -2229,12 +2302,13 @@ def share_settings():
     overall_values = overall_field_values(snapshot)
     overall_rows = [
         {
-            "key": overall_share_key(field),
+            "key": overall_share_key(grade_field),
             "label": label,
-            "value": overall_values.get(field),
-            "is_public": overall_share_key(field) in keys,
+            "grade_value": overall_values.get(grade_field),
+            "rank_value": overall_values.get(rank_field),
+            "is_public": overall_share_key(grade_field) in keys,
         }
-        for field, label in OVERALL_SHARE_FIELDS
+        for grade_field, rank_field, label in OVERALL_SHARE_GROUPS
     ]
 
     course_rows = []
@@ -2246,12 +2320,13 @@ def share_settings():
                 "name": course.get("course_name"),
                 "fields": [
                     {
-                        "key": course_share_key(course["key"], field),
+                        "key": course_share_key(course["key"], grade_field),
                         "label": label,
-                        "value": values.get(field),
-                        "is_public": course_share_key(course["key"], field) in keys,
+                        "grade_value": values.get(grade_field),
+                        "rank_value": values.get(rank_field),
+                        "is_public": course_share_key(course["key"], grade_field) in keys,
                     }
-                    for field, label in COURSE_SHARE_FIELDS
+                    for grade_field, rank_field, label in COURSE_SHARE_GROUPS
                 ],
             }
         )

@@ -9,8 +9,9 @@ block content %}
         <p class="meta">Sharing</p>
         <h1 class="mt-2 text-lg font-semibold">Choose what to make public</h1>
         <p class="card-subtitle">
-          Every grade, rank and average is private by default. Tick an item to
-          publish it on your public page &mdash; nothing else is ever shown.
+          Every grade, rank and average is private by default. A grade and its
+          rank travel together: tick a pair to publish both on your public page,
+          untick to hide both &mdash; nothing else is ever shown.
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
@@ -29,13 +30,14 @@ block content %}
   <section class="card">
     <h2 class="card-title">Overall</h2>
     <p class="card-subtitle">Your class-wide averages and ranks.</p>
-    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div class="mt-4 grid gap-3 sm:grid-cols-2">
       {% for row in overall_rows %}
       <label class="toggle">
         <span class="toggle-text">
           <span class="toggle-label block">{{ row.label }}</span>
           <span class="toggle-value block">
-            {{ row.value if row.value is not none else 'Not available' }}
+            Average {{ row.grade_value if row.grade_value is not none else '—' }}
+            &middot; Rank {{ row.rank_value if row.rank_value is not none else '—' }}
           </span>
         </span>
         <input
@@ -61,13 +63,14 @@ block content %}
       <h2 class="card-title">{{ course.name }}</h2>
       <span class="badge badge-muted">{{ course.code }}</span>
     </div>
-    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div class="mt-4 grid gap-3 sm:grid-cols-2">
       {% for item in course.fields %}
       <label class="toggle">
         <span class="toggle-text">
           <span class="toggle-label block">{{ item.label }}</span>
           <span class="toggle-value block">
-            {{ item.value if item.value is not none else 'Not available' }}
+            Grade {{ item.grade_value if item.grade_value is not none else '—' }}
+            &middot; Rank {{ item.rank_value if item.rank_value is not none else '—' }}
           </span>
         </span>
         <input

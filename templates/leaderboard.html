@@ -126,7 +126,7 @@ block content %}
         <tr>
           <th class="num w-20">Rank</th>
           <th>Student</th>
-          <th class="num w-40">Grade</th>
+          <th class="num w-40">Grade &amp; rank</th>
         </tr>
       </thead>
       <tbody>
@@ -153,7 +153,8 @@ block content %}
             </div>
           </td>
           <td class="num font-medium" {% if row.color %}style="color: {{ row.color }}"{% endif %}>
-            {{ row.value }}
+            {{ row.value }}{% if row.ul_rank %}
+            <span class="text-text-mute">(#{{ row.ul_rank }})</span>{% endif %}
           </td>
         </tr>
         {% else %}
