@@ -1848,7 +1848,7 @@ def _polling_blocked() -> bool:
 
     Checks two things:
       1. Admin pause toggle via the ``polling_paused`` setting.
-      2. Active hours (UTC 02:00 – 14:59) – polling only runs inside this
+      2. Active hours (UTC 04:00 – 12:59) – polling only runs inside this
          window.  On-demand fetches (first login, dashboard refresh, …)
          are *not* affected – only the background scheduler.
     """
@@ -1856,7 +1856,7 @@ def _polling_blocked() -> bool:
     if setting and setting.value.lower() in ("1", "true", "yes"):
         return True
     hour = now_utc().hour
-    return not (2 <= hour < 15)
+    return not (4 <= hour < 13)
 
 
 def poll_all_groups() -> None:
