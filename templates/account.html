@@ -1,0 +1,86 @@
+{% extends 'base.html' %} {% set title = 'Account - ULFG Grade Monitor' %}
+{% block content %}
+<div class="mx-auto w-full max-w-lg py-8">
+  <div class="section-stack">
+    <div>
+      <p class="meta">Settings</p>
+      <h1 class="mt-2 text-lg font-semibold">Account</h1>
+      <p class="card-subtitle">
+        Signed in as <code>{{ current_user.username }}</code>.
+      </p>
+    </div>
+
+    <details class="card">
+      <summary
+        class="flex cursor-pointer items-center justify-between gap-3 list-none"
+      >
+        <div>
+          <h2 class="card-title">Change username</h2>
+          <p class="card-subtitle">The name you sign in with.</p>
+        </div>
+        <span class="badge">
+          <span class="details-chevron">&#9662;</span> Edit
+        </span>
+      </summary>
+      <form method="post" class="mt-5 space-y-4">
+        {{ username_form.hidden_tag() }}
+        <div>
+          {{ username_form.new_username.label(class='field-label') }}
+          {{ username_form.new_username(class='input', value=current_user.username, autocomplete='username') }}
+        </div>
+        <div>
+          {{ username_form.current_password.label(class='field-label') }}
+          {{ username_form.current_password(class='input', autocomplete='current-password') }}
+        </div>
+        {{ username_form.submit_username(class='btn btn-primary') }}
+      </form>
+    </details>
+
+    <details class="card">
+      <summary
+        class="flex cursor-pointer items-center justify-between gap-3 list-none"
+      >
+        <div>
+          <h2 class="card-title">Change password</h2>
+          <p class="card-subtitle">Only ever stored hashed in the database.</p>
+        </div>
+        <span class="badge">
+          <span class="details-chevron">&#9662;</span> Edit
+        </span>
+      </summary>
+      <form method="post" class="mt-5 space-y-4">
+        {{ password_form.hidden_tag() }}
+        <div>
+          {{ password_form.current_password.label(class='field-label') }}
+          {{ password_form.current_password(class='input', autocomplete='current-password') }}
+        </div>
+        <div>
+          {{ password_form.new_password.label(class='field-label') }}
+          {{ password_form.new_password(class='input', autocomplete='new-password') }}
+        </div>
+        <div>
+          {{ password_form.confirm_password.label(class='field-label') }}
+          {{ password_form.confirm_password(class='input', autocomplete='new-password') }}
+        </div>
+        {{ password_form.submit(class='btn btn-primary') }}
+      </form>
+    </details>
+
+    <section class="card">
+      <h2 class="card-title">Delete account</h2>
+      <p class="card-subtitle">
+        Permanently removes your account, grades, and sharing settings. This
+        cannot be undone.
+      </p>
+      <form
+        method="post"
+        class="mt-5"
+        onsubmit="return confirm('Delete your account permanently? This cannot be undone.');"
+      >
+        {{ delete_form.hidden_tag() }}
+        {{ delete_form.submit_delete(class='btn btn-danger') }}
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}

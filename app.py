@@ -321,6 +321,16 @@ class ChangePasswordForm(FlaskForm):
 AdminChangePasswordForm = ChangePasswordForm
 
 
+class ChangeUsernameForm(FlaskForm):
+    new_username = StringField("New username", validators=[DataRequired(), Length(min=3, max=80)])
+    current_password = PasswordField("Current password or ULFG password", validators=[DataRequired()])
+    submit_username = SubmitField("Change username")
+
+
+class DeleteAccountForm(FlaskForm):
+    submit_delete = SubmitField("Delete my account")
+
+
 class ConsentForm(FlaskForm):
     hostage_consent = BooleanField(
         "If you turn this on you consent to admins seeing your grades, keep it off otherwise.",
@@ -2062,6 +2072,42 @@ def update_cookie():
     return render_template("cookie.html", cookie_form=cookie_form, credentials_form=credentials_form)
 
 
+def verify_account_password(user: User, password: str) -> bool:
+    """True when *password* is the account password, or - for a linked student -
+    their ULFG password. This is the same dual check the change-password flow has
+    always accepted, factored out so username change and delete can reuse it."""
+    if check_password_hash(user.password_hash, password):
+        return True
+    if user.ul_student_id:
+        try:
+            ul_api.login_with_credentials(user.ul_student_id, password)
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def delete_own_account(user: User) -> None:
+    """Remove a user and everything cascaded from them (grades, averages, shares,
+    stored ULFG credentials). If they represented a monitoring group, hand the
+    role off first so the group keeps polling."""
+    group = user.group
+    if group and group.representative_user_id == user.id:
+        group.representative_user_id = None
+    log_event(
+        "info",
+        "account_self_delete",
+        f"User {user.username} deleted their own account",
+        user_id=user.id,
+        group_id=user.group_id,
+    )
+    logout_user()
+    db.session.delete(user)
+    db.session.commit()
+    if group:
+        choose_new_representative(group)
+
+
 @app.route("/change-password", methods=["GET", "POST"])
 @login_required
 def change_password():
@@ -2071,17 +2117,9 @@ def change_password():
     if force_change:
         form.current_password.data = "placeholder"
     if form.validate_on_submit():
-        if not force_change:
-            current_pw = form.current_password.data
-            if not check_password_hash(current_user.password_hash, current_pw):
-                try:
-                    if current_user.ul_student_id:
-                        ul_api.login_with_credentials(current_user.ul_student_id, current_pw)
-                    else:
-                        raise ValueError("no student ID")
-                except Exception:
-                    flash("Current password is incorrect.", "error")
-                    return render_template("change_password.html", form=form, force_password_change=force_change)
+        if not force_change and not verify_account_password(current_user, form.current_password.data):
+            flash("Current password is incorrect.", "error")
+            return render_template("change_password.html", form=form, force_password_change=force_change)
 
         current_user.password_hash = generate_password_hash(form.new_password.data)
         current_user.force_password_change = False
@@ -2090,6 +2128,53 @@ def change_password():
         return redirect(url_for("dashboard"))
 
     return render_template("change_password.html", form=form, force_password_change=force_change)
+
+
+@app.route("/account", methods=["GET", "POST"])
+@login_required
+@student_only
+def account():
+    username_form = ChangeUsernameForm()
+    password_form = ChangePasswordForm()
+    delete_form = DeleteAccountForm()
+
+    if username_form.submit_username.data and username_form.validate():
+        new_username = username_form.new_username.data.strip()
+        if not verify_account_password(current_user, username_form.current_password.data):
+            flash("Current password is incorrect.", "error")
+        elif new_username == current_user.username:
+            flash("That is already your username.", "info")
+        elif User.query.filter(func.lower(User.username) == new_username.lower(), User.id != current_user.id).first():
+            flash("That username is already taken.", "error")
+        else:
+            previous = current_user.username
+            current_user.username = new_username
+            db.session.commit()
+            log_event("info", "username_change", f"User {previous} changed username to {new_username}", user_id=current_user.id)
+            flash("Username updated.", "success")
+        return redirect(url_for("account"))
+
+    if password_form.submit.data and password_form.validate():
+        if not verify_account_password(current_user, password_form.current_password.data):
+            flash("Current password is incorrect.", "error")
+        else:
+            current_user.password_hash = generate_password_hash(password_form.new_password.data)
+            current_user.force_password_change = False
+            db.session.commit()
+            flash("Password updated.", "success")
+        return redirect(url_for("account"))
+
+    if delete_form.submit_delete.data and delete_form.validate():
+        delete_own_account(current_user)
+        flash("Your account has been deleted.", "success")
+        return redirect(url_for("login"))
+
+    return render_template(
+        "account.html",
+        username_form=username_form,
+        password_form=password_form,
+        delete_form=delete_form,
+    )
 
 
 @app.route("/help")
