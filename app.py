@@ -2180,6 +2180,10 @@ def delete_own_account(user: User) -> None:
     """Remove a user and everything cascaded from them (grades, averages, shares,
     stored ULFG credentials). If they represented a monitoring group, hand the
     role off first so the group keeps polling."""
+    # `user` is usually the `current_user` LocalProxy. Resolve it to the mapped
+    # instance up front: `logout_user()` makes the proxy point at the anonymous
+    # user, so deleting through the proxy afterwards raises UnmappedInstanceError.
+    user = db.session.get(User, user.id)
     group = user.group
     if group and group.representative_user_id == user.id:
         group.representative_user_id = None
@@ -2190,9 +2194,9 @@ def delete_own_account(user: User) -> None:
         user_id=user.id,
         group_id=user.group_id,
     )
-    logout_user()
     db.session.delete(user)
     db.session.commit()
+    logout_user()
     if group:
         choose_new_representative(group)
 
