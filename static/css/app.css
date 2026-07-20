@@ -660,3 +660,11 @@ details[open] .details-chevron {
   border-color: var(--line-hard);
   font-weight: 500;
 }
+
+/* ---------- PiP button ---------- */
+
+.btn-pip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}

@@ -7,6 +7,24 @@
     <p class="card-subtitle">Live monitoring health across every group.</p>
   </section>
 
+  <section class="card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="max-w-xl">
+        <p class="meta">Simulate grade drop</p>
+        <h2 class="card-title mt-2">Test grade 67 / rank 76 for everyone</h2>
+        <p class="card-subtitle">
+          Inserts a fake course "Simulated Grade" with grade 67 and rank 76 into
+          every monitored user's dashboard. Triggers alarm, toast, and PiP.
+          Auto-removed after 60 seconds.
+        </p>
+      </div>
+      <form method="post" action="{{ url_for('admin_simulate_grade') }}">
+        {{ simulate_grade_form.hidden_tag() }}
+        {{ simulate_grade_form.submit(class='btn btn-warn') }}
+      </form>
+    </div>
+  </section>
+
   <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
     {% for label, value in [ ('Total users', total_users), ('Online users',
     online_users), ('Groups', groups), ('Requests per minute', rpm) ] %}
@@ -50,15 +68,14 @@
   <section class="card">
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div class="max-w-xl">
-        <p class="meta">Sound test</p>
-        <h2 class="card-title mt-2">Play grade-change alarm for everyone</h2>
+        <p class="meta">Grade test</p>
+        <h2 class="card-title mt-2">Send test grade to all users</h2>
         <p class="card-subtitle">
-          Runs the same alert sound the dashboard uses when a grade changes, on
-          every connected user's browser at once. They will hear it immediately.
+          Triggers alarm, toast, and PiP with a fake grade. Auto-removed after 60s.
         </p>
       </div>
       <button id="test-grade-sound" type="button" class="btn">
-        Play for everyone
+        Send test
       </button>
     </div>
   </section>

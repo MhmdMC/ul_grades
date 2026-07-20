@@ -46,12 +46,34 @@ block content %}
         <span id="connection-status" class="badge conn-idle">
           Disconnected
         </span>
-        {% if not admin_viewing %}
         <a class="btn btn-sm" href="{{ url_for('share_settings') }}"
           >Sharing settings</a
         >
-        {% endif %}
       </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="flex flex-wrap items-center gap-4">
+      <div class="flex items-center gap-3">
+        <label class="meta" for="pip-volume">Alert volume</label>
+        <input id="pip-volume" type="range" min="0" max="100" value="100" class="w-24" />
+        <span id="pip-volume-label" class="meta w-8 text-right">100%</span>
+        <button id="test-volume" type="button" class="btn btn-sm">Test</button>
+      </div>
+      {% if not admin_viewing %}
+      <button
+        id="pip-toggle"
+        class="btn btn-sm btn-pip ml-auto"
+        style="display:none"
+        title="Track grades in a floating window"
+      >
+        Track while in other apps by PIP
+      </button>
+      {% endif %}
+      <p class="meta text-text-mute w-full" id="pip-volume-ios-note" style="display:none">
+        PIP mode volume in iOS cannot be currently changed and is locked to low.
+      </p>
     </div>
   </section>
 

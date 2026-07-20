@@ -20,7 +20,7 @@ def _clear_pycache(root: Path) -> None:
 _clear_pycache(Path(__file__).resolve().parent)
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 from crypto_utils import EncryptedText
 from flask_login import (
@@ -43,6 +43,12 @@ from wtforms import BooleanField, PasswordField, StringField, SubmitField, TextA
 from wtforms.validators import DataRequired, EqualTo, Length
 
 from ul_api import ULAPIClient, ULAPIResponse
+
+import io
+import subprocess
+import tempfile
+from imageio_ffmpeg import get_ffmpeg_exe
+from PIL import Image, ImageDraw, ImageFont
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -306,6 +312,10 @@ class AdminCreateUserForm(FlaskForm):
 
 class AdminResetClassCacheForm(FlaskForm):
     submit = SubmitField("Reset cached class IDs")
+
+
+class AdminSimulateGradeForm(FlaskForm):
+    submit = SubmitField("Simulate grade drop for everyone")
 
 
 class ChangePasswordForm(FlaskForm):
@@ -1563,6 +1573,44 @@ def emit_grade_change(user: User, changes: list[dict[str, Any]], snapshot: dict[
     socketio.emit("toast", {"title": "New grade detected", "message": summarize_change(changes), "kind": "success"}, to=f"user-{user.id}")
 
 
+SIM_MATERIAL_ID = "__sim_test"
+
+
+def emit_dashboard_refresh(user: User) -> None:
+    context = dashboard_context(user)
+    normalized = context["snapshot"]
+    socketio.emit(
+        "dashboard_payload",
+        {
+            "student_name": user.ul_name or normalized.get("student_name"),
+            "average": normalized.get("average"),
+            "overall_rank": normalized.get("overall_rank"),
+            "final_average": normalized.get("final_average"),
+            "final_rank": normalized.get("final_rank"),
+            "courses": context["courses"],
+            "updated_at": user.last_successful_poll.isoformat() if user.last_successful_poll else None,
+        },
+        to=f"user-{user.id}",
+    )
+
+
+def simulate_grade_cleanup() -> None:
+    with app.app_context():
+        Grade.query.filter_by(material_id=SIM_MATERIAL_ID).delete()
+        Material.query.filter_by(material_id=SIM_MATERIAL_ID).delete()
+        Group.query.update({"paused": False})
+        db.session.commit()
+
+        for user in User.query.filter(User.is_admin == False).all():
+            try:
+                emit_dashboard_refresh(user)
+                socketio.emit("toast", {"title": "Test ended", "message": "The simulated grade drop has been cleaned up.", "kind": "info"}, to=f"user-{user.id}")
+            except Exception:
+                pass
+
+        log_event("info", "simulate_grade_cleanup", "Cleaned up simulated grade data")
+
+
 def fetch_and_compare_user(user: User, is_first_group_poll: bool = False) -> dict[str, Any] | None:
     if not user.ul_cookie:
         return None
@@ -2002,6 +2050,140 @@ def touch_current_user() -> None:
 @app.context_processor
 def inject_globals() -> dict[str, Any]:
     return {"now": now_utc(), "is_admin": is_admin_user(), "class_display_name": class_display_name}
+
+
+# ---------------------------------------------------------------------------
+# PiP (Picture-in-Picture) video generation
+# ---------------------------------------------------------------------------
+
+PIP_FONT_CACHE: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+
+
+def _pip_get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    key = (size, bold)
+    if key in PIP_FONT_CACHE:
+        return PIP_FONT_CACHE[key]
+    paths = [
+        "arialbd.ttf" if bold else "arial.ttf",
+        "Arialbd.ttf" if bold else "Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+    for path in paths:
+        try:
+            font = ImageFont.truetype(path, size)
+            PIP_FONT_CACHE[key] = font
+            return font
+        except (IOError, OSError):
+            continue
+    font = ImageFont.load_default()
+    PIP_FONT_CACHE[key] = font
+    return font
+
+
+def _pip_render_frame(mode: str, course_name: str | None = None) -> Image.Image:
+    W, H = 320, 180
+    img = Image.new("RGB", (W, H), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    draw.rectangle([12, 0, W - 24, 2], fill=(61, 99, 167))
+    draw.rectangle([12, H - 2, W - 24, H], fill=(61, 99, 167))
+
+    if mode == "grade" and course_name:
+        draw.rectangle([0, 0, W, H], fill=(15, 23, 42))
+        draw.rectangle([12, 0, W - 24, 2], fill=(226, 177, 5))
+        draw.rectangle([12, H - 2, W - 24, H], fill=(226, 177, 5))
+
+        font_course = _pip_get_font(16, bold=True)
+        draw.text((16, 85), course_name, fill=(255, 255, 255), font=font_course)
+
+        font_dropped = _pip_get_font(14)
+        draw.text((16, 114), "just dropped!", fill=(226, 177, 5), font=font_dropped)
+
+        font_hint = _pip_get_font(10)
+        hint = "Tap to open dashboard"
+        htw = draw.textlength(hint, font=font_hint)
+        draw.text((W // 2 - htw // 2, H - 22), hint, fill=(148, 163, 184), font=font_hint)
+    else:
+        font_tracking = _pip_get_font(18, bold=True)
+        tracking = "Tracking..."
+        ttw = draw.textlength(tracking, font=font_tracking)
+        draw.text((W // 2 - ttw // 2, 70), tracking, fill=(30, 41, 59), font=font_tracking)
+
+        font_status = _pip_get_font(12)
+        status = "Monitoring active"
+        stw = draw.textlength(status, font=font_status)
+        draw.text((W // 2 - stw // 2, 100), status, fill=(100, 116, 139), font=font_status)
+
+    return img
+
+
+_pip_video_cache: dict[tuple[str, str | None], bytes] = {}
+
+
+def _generate_pip_mp4(mode: str, course_name: str | None = None, noaudio: bool = False) -> bytes:
+    img = _pip_render_frame(mode, course_name)
+
+    fd, tmp_img = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    fd, tmp_output = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    try:
+        img.save(tmp_img)
+
+        ffmpeg = get_ffmpeg_exe()
+        if mode == "grade" and not noaudio:
+            cmd = [
+                ffmpeg,
+                "-loop", "1",
+                "-i", tmp_img,
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=48000,volume=5.0",
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "64k",
+                "-t", "2", "-y", tmp_output,
+            ]
+        else:
+            cmd = [
+                ffmpeg,
+                "-loop", "1",
+                "-i", tmp_img,
+                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "64k",
+                "-t", "2", "-y", tmp_output,
+            ]
+
+        subprocess.run(cmd, capture_output=True, check=True)
+
+        with open(tmp_output, "rb") as f:
+            return f.read()
+    finally:
+        for p in (tmp_img, tmp_output):
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+
+@app.route("/api/pip-video")
+@login_required
+def pip_video():
+    mode = request.args.get("mode", "tracking")
+    course_name = request.args.get("course_name")
+    noaudio = request.args.get("noaudio", "0") == "1"
+    key = (mode, course_name, noaudio)
+
+    if key in _pip_video_cache:
+        return send_file(io.BytesIO(_pip_video_cache[key]), mimetype="video/mp4")
+
+    try:
+        mp4_bytes = _generate_pip_mp4(mode, course_name, noaudio)
+        _pip_video_cache[key] = mp4_bytes
+        return send_file(io.BytesIO(mp4_bytes), mimetype="video/mp4")
+    except Exception:
+        return jsonify({"error": "Failed to generate video"}), 500
 
 
 @app.route("/")
@@ -2636,6 +2818,7 @@ def admin_dashboard():
         quiet_hours_active=quiet_hours_active,
         polling_interval=POLL_INTERVAL_SECONDS,
         reset_class_cache_form=AdminResetClassCacheForm(),
+        simulate_grade_form=AdminSimulateGradeForm(),
         change_password_form=AdminChangePasswordForm(),
     )
 
@@ -2718,6 +2901,80 @@ def admin_reset_class_cache():
 
     db.session.commit()
     flash("Cached class IDs were cleared.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/simulate-grade", methods=["POST"])
+@login_required
+def admin_simulate_grade():
+    if not is_admin_user():
+        abort(403)
+    form = AdminSimulateGradeForm()
+    if not form.validate_on_submit():
+        abort(400)
+
+    material = Material.query.filter_by(material_id=SIM_MATERIAL_ID).first()
+    if not material:
+        material = Material(material_id=SIM_MATERIAL_ID, code="TEST", name="Simulated Grade", credits=None, image="")
+        db.session.add(material)
+        db.session.commit()
+
+    groups = Group.query.all()
+    was_paused = {}
+    for group in groups:
+        was_paused[group.id] = group.paused
+        group.paused = True
+    db.session.commit()
+
+    scheduler.add_job(
+        func=simulate_grade_cleanup,
+        trigger="date",
+        run_date=now_utc() + timedelta(seconds=60),
+        id="sim_cleanup",
+        replace_existing=True,
+    )
+
+    users = User.query.filter(User.is_admin == False).all()
+    affected = 0
+    for user in users:
+        if not Grade.query.filter_by(user_id=user.id).first():
+            continue
+
+        grade = Grade.query.filter_by(user_id=user.id, material_id=SIM_MATERIAL_ID).first()
+        if grade is None:
+            grade = Grade(user_id=user.id, material_id=SIM_MATERIAL_ID)
+            db.session.add(grade)
+        grade.partial = 67.0
+        grade.partial_rank = 76
+        grade.final = None
+        grade.final_grade = None
+        grade.final_rank = None
+        grade.updated_at = now_utc()
+        db.session.commit()
+
+        snapshot = stored_snapshot(user)
+        if snapshot:
+            changes = [
+                {
+                    "type": "new_course",
+                    "course": {
+                        "key": SIM_MATERIAL_ID,
+                        "course_code": "TEST",
+                        "course_name": "Simulated Grade",
+                        "credits": None,
+                        "partial": 67.0,
+                        "partial_rank": 76,
+                        "final": None,
+                        "final_rank": None,
+                        "finalGrade": None,
+                    },
+                }
+            ]
+            emit_grade_change(user, changes, snapshot)
+            affected += 1
+
+    log_event("info", "simulate_grade", f"Admin simulated grade drop for {affected} users")
+    flash(f"Simulated grade drop for {affected} users. Auto-cleanup in 60s.", "success")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -2940,25 +3197,36 @@ def request_refresh():
 
 @socketio.on("admin_test_alarm")
 def admin_test_alarm():
-    """Sound the grade-change alarm on every connected client at once.
-
-    The button is already template-guarded for admins only. Socket.IO
-    events carry no CSRF token, but the worst a malicious emit can do
-    is a harmless 3-second beep on every connected device.
-    """
     log_event(
         "info",
         "admin_test_alarm",
         f"Admin test alarm triggered by {'admin' if is_admin_user() else 'unknown'}",
     )
-    socketio.emit(
-        "play_alarm",
-        {
-            "seconds": 3,
-            "title": "Sound test",
-            "message": "An admin triggered the grade-change alarm. This is not a grade change.",
-        },
-    )
+    import threading
+    course_key = f"simulated-grade-{int(datetime.now().timestamp())}"
+    payload = {
+        "student_name": "Test",
+        "average": "67",
+        "overall_rank": "76",
+        "updated_at": datetime.now(timezone.utc).astimezone().strftime("%H:%M"),
+        "changes": [{
+            "type": "new_grade",
+            "course": {
+                "key": course_key,
+                "course_name": "Simulated Grade",
+                "course_code": "TEST",
+                "partial": "67",
+                "partial_rank": "76",
+                "grade_color": "#3d9c42",
+            },
+        }],
+        "is_test": True,
+    }
+    socketio.emit("grade_change", payload)
+
+    def remove_test():
+        socketio.emit("remove_test_grade", {"key": course_key})
+    threading.Timer(60, remove_test).start()
 
 
 @app.errorhandler(403)
