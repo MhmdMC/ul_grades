@@ -9,5 +9,7 @@ APScheduler>=3.10
 requests>=2.31
 eventlet>=0.36
 apscheduler
-imageio>=2.37
-imageio-ffmpeg>=0.6
+imageio==2.35.1
+imageio-ffmpeg==0.5.1
+gunicorn
+greenlet
