@@ -72,16 +72,16 @@
     }
   }
 
-  function beep(durationMs = 360, frequency = 880) {
+  function beep(durationMs = 360, frequency = 440) {
     if (!audioContext) return;
     try {
       const oscillator = audioContext.createOscillator();
       const gain = audioContext.createGain();
-      oscillator.type = "square";
+      oscillator.type = "sine";
       oscillator.frequency.value = frequency;
       oscillator.connect(gain);
       gain.connect(audioContext.destination);
-      gain.gain.value = pipVolume * 0.75;
+      gain.gain.value = pipVolume;
       oscillator.start();
       setTimeout(() => {
         try {
@@ -99,10 +99,10 @@
     ensureAudioUnlocked();
     const started = Date.now();
     const timer = setInterval(() => {
-      beep(360, 880);
+      beep(360);
       if (Date.now() - started >= seconds * 1000) clearInterval(timer);
     }, 350);
-    beep(360, 660);
+    beep(360);
   }
 
   function gradeColor(value) {
@@ -332,8 +332,8 @@
         }
         if (!this.isSafari && this._pipGain && this._pipOsc) {
           this._pipOsc.frequency.value = 440;
-          this._pipOsc.type = "square";
-          this._pipGain.gain.value = pipVolume * 0.75;
+          this._pipOsc.type = "sine";
+          this._pipGain.gain.value = pipVolume;
           this._volumeTimer = setTimeout(() => {
             this._volumeTimer = null;
             if (this._pipGain) this._pipGain.gain.value = 0;
