@@ -2802,7 +2802,7 @@ def admin_dashboard():
 
     pause_setting = Setting.query.filter_by(key="polling_paused").first()
     polling_paused = pause_setting is not None and pause_setting.value.lower() in ("1", "true", "yes")
-    quiet_hours_active = 2 <= now_utc().hour < 15
+    quiet_hours_active = now_utc().hour < 4 or now_utc().hour >= 13
 
     last_poll = Group.query.order_by(Group.last_poll.desc().nullslast()).first()
     avg_poll = db.session.query(func.avg(Group.last_response_time)).scalar() or 0
