@@ -344,3 +344,32 @@ def test_history_import_requires_csrf(database, monkeypatch):
     login(client, admin)
     assert client.post('/admin/semesters/sync').status_code == 400
     assert m.SemesterSyncJob.query.count() == 0
+
+
+def test_latest_semester_does_not_depend_on_api_list_order():
+    entries = [
+        {'class': {'id': 'current', 'year': 2026, 'definition': {'year': 3, 'half': 'fall'}}},
+        {'class': {'id': 'spring', 'year': 2025, 'definition': {'year': 2, 'half': 'spring'}}},
+        {'class': {'id': 'fall', 'year': 2025, 'definition': {'year': 2, 'half': 'fall'}}},
+    ]
+    assert m.latest_class_id_from_payload({'data': entries}) == 'current'
+    assert m.latest_class_id_from_payload(list(reversed(entries))) == 'current'
+    assert m.latest_class_id_from_payload(entries[1:]) == 'spring'
+
+
+def test_leaderboard_newest_year_first_and_admin_default(database):
+    user, admin = database
+    admin.is_admin = True
+    for cid, year, name in [('old', '2025', 'A old class'), ('new', '2026', 'Z new class')]:
+        school_class = m.db.session.get(m.SchoolClass, cid)
+        school_class.academic_year = year
+        school_class.name = name
+        m.persist_snapshot(user, snapshot(65), cid)
+    client = m.app.test_client()
+    login(client, admin)
+    page = client.get('/leaderboard').data.decode()
+    assert page.index('>2026</h3>') < page.index('>2025</h3>')
+    assert page.index('Z new class') < page.index('A old class')
+    assert 'name="class_id" value="new"' in page
+    old_page = client.get('/leaderboard?class_id=old').data.decode()
+    assert 'name="class_id" value="old"' in old_page

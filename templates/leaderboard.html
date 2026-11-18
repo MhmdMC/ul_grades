@@ -27,16 +27,20 @@ block content %}
   {% if classes %}
   <section class="card">
     <h2 class="card-title">Class</h2>
-    <div class="mt-4 flex flex-wrap gap-2">
-      {% for item in classes %}
+    {% for item in classes %}
+      {% if loop.changed(item.academic_year) %}
+      {% if not loop.first %}</div>{% endif %}
+      <h3 class="meta mt-5">{{ item.academic_year or 'Other classes' }}</h3>
+      <div class="mt-3 flex flex-wrap gap-2">
+      {% endif %}
       <a
         class="btn {{ 'btn-primary' if item.class_id == selected_class_id else '' }}"
         href="{{ url_for('leaderboard', class_id=item.class_id, q=search) }}"
       >
         {{ item.name }}
       </a>
-      {% endfor %}
-    </div>
+      {% if loop.last %}</div>{% endif %}
+    {% endfor %}
 
   </section>
   {% else %}

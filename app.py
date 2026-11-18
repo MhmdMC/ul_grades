@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import requests
 from datetime import datetime, timedelta, timezone
@@ -1729,28 +1730,23 @@ def admin_sync_semesters():
     return redirect(url_for("admin_semesters"))
 
 
-def latest_class_id_from_payload(payload: Any) -> str | None:
-    if isinstance(payload, dict):
-        for key in ("classes", "data", "results", "items"):
-            nested = payload.get(key)
-            if nested is not None:
-                class_id = latest_class_id_from_payload(nested)
-                if class_id:
-                    return class_id
-        return None
+def academic_year_number(value: Any) -> int:
+    years = re.findall(r"\b(?:19|20)\d{2}\b", str(value or ""))
+    return max(map(int, years), default=0)
 
-    if isinstance(payload, list):
-        for entry in reversed(payload):
-            if not isinstance(entry, dict):
-                continue
-            class_info = entry.get("class")
-            if isinstance(class_info, dict):
-                class_id = class_info.get("id") or entry.get("classId")
-            else:
-                class_id = entry.get("classId") or entry.get("id")
-            if class_id is not None:
-                return str(class_id)
-    return None
+
+def latest_class_id_from_payload(payload: Any) -> str | None:
+    candidates = []
+    for index, entry in enumerate(class_entries(payload)):
+        info = entry.get("class") if isinstance(entry.get("class"), dict) else entry
+        cid = entry.get("classId") or info.get("id")
+        if cid is None:
+            continue
+        definition = info.get("definition") if isinstance(info.get("definition"), dict) else {}
+        year = academic_year_number(info.get("academicYear") or info.get("academic_year") or info.get("year"))
+        half = {"winter": 0, "fall": 1, "spring": 2, "summer": 3}.get(str(definition.get("half", "")).lower(), 0)
+        candidates.append(((year, coerce_int(definition.get("year")) or 0, half, index), str(cid)))
+    return max(candidates)[1] if candidates else None
 
 
 def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
@@ -2907,15 +2903,17 @@ def leaderboard():
     for cids in groups.values():
         sorted_cids = sorted(cids)
         rep_id = sorted_cids[0]
+        record = db.session.get(SchoolClass, rep_id)
         classes.append({
             "class_id": rep_id,
             "name": class_base_name(rep_id),
+            "academic_year": record.academic_year if record else None,
         })
 
     if search:
         needle = search.lower()
         classes = [item for item in classes if needle in item["name"].lower() or needle in str(item["class_id"])]
-    classes.sort(key=lambda item: item["name"].lower())
+    classes.sort(key=lambda item: (-academic_year_number(item["academic_year"]), item["academic_year"] or "", item["name"].lower()))
 
     # Reverse map: any class_id → its group's sorted ids
     class_id_to_group: dict[str, list[str]] = {}
@@ -2940,6 +2938,8 @@ def leaderboard():
     if not selected_class_id and not search and current_user.ul_class_id:
         uid = str(current_user.ul_class_id)
         selected_class_id = (class_id_to_group.get(uid) or [uid])[0]
+    elif not selected_class_id and not search and classes:
+        selected_class_id = classes[0]["class_id"]
     elif selected_class_id:
         # Normalize to the group representative so button highlighting works.
         cids = class_id_to_group.get(selected_class_id)

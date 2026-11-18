@@ -3,7 +3,7 @@
   <form method="get" class="flex flex-wrap items-end gap-3">
     <label class="flex flex-col gap-2">
       <span class="meta">Semester</span>
-      <select name="semester" class="input">
+      <select name="semester" class="input" onchange="this.form.requestSubmit()">
         {% for semester in semesters %}
         <option value="{{ semester.id }}" {{ 'selected' if semester.id == selected_semester else '' }}>
           {{ semester.name }}{{ ' — Current' if semester.current else '' }}
@@ -11,13 +11,7 @@
         {% endfor %}
       </select>
     </label>
-    <button class="btn" type="submit">View semester</button>
+    <noscript><button class="btn" type="submit">View semester</button></noscript>
   </form>
-  {% if historical_semester %}
-  <p class="card-subtitle mt-3">Viewing a previous semester. Live monitoring follows your current semester.</p>
-  {% endif %}
-  {% if request.endpoint == 'dashboard' and historical_semester %}
-  <p class="card-subtitle mt-3">Previous-semester grades are imported and refreshed by an administrator.</p>
-  {% endif %}
 </section>
 {% endif %}
