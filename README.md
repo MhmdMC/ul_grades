@@ -13,9 +13,13 @@ saved ULFG cookies and credentials are encrypted with it.
 
 - The dashboard defaults to the current class returned by ULFG's current-class
   endpoint, with the existing classes-list fallback if that endpoint is unavailable.
-- The first dashboard visit discovers enrollments and imports missing semesters.
-  Discovery is checked again after 24 hours. **Refresh all semesters** rediscovers
-  classes and refreshes every enrolled semester, including previously imported ones.
+- Dashboard visits discover enrollments at most once every 24 hours and fetch only
+  current-semester grades when needed. Students cannot import historical grades.
+- **Admin → Semesters** has refresh buttons for everyone's history, one student's
+  history, and one specific previous semester. Bulk and student refreshes also
+  rediscover enrollments. Imports run in the background with persistent progress
+  and safe error messages. Only one history job runs at a time; a job interrupted
+  by a server restart can be retried after ten minutes without progress.
 - Dashboard, sharing settings, and student profiles have a semester selector.
   Rankings include historical classes; directory entries link to the exact shared
   semester. Search opens a student's current profile, where history is selectable.
@@ -23,6 +27,7 @@ saved ULFG cookies and credentials are encrypted with it.
   class ID. Repeated courses cannot overwrite another semester's grades.
 - New semesters are private by default. Existing self-access, anonymous ranking,
   and admin-consent rules apply independently to each semester's grade fields.
+  Admin imports do not grant admins additional permission to view private grades.
 - Live polling and alerts follow the current semester. Viewing history does not
   change monitoring. Failed imports preserve saved grades and can be retried.
 - Classes from different academic years are kept separate. English/French sections

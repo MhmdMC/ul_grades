@@ -16,12 +16,8 @@
   {% if historical_semester %}
   <p class="card-subtitle mt-3">Viewing a previous semester. Live monitoring follows your current semester.</p>
   {% endif %}
-  {% if request.endpoint == 'dashboard' %}
-  <form method="post" action="{{ url_for('sync_semesters') }}" class="mt-3">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-    <button class="btn btn-sm" type="submit">Refresh all semesters</button>
-    <span class="text-sm text-text-mid">Import or update your full semester history from ULFG.</span>
-  </form>
+  {% if request.endpoint == 'dashboard' and historical_semester %}
+  <p class="card-subtitle mt-3">Previous-semester grades are imported and refreshed by an administrator.</p>
   {% endif %}
 </section>
 {% endif %}

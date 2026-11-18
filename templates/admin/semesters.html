@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% set title = 'Semester history - ULFG Grade Monitor' %}
+{% block content %}
+{% macro refresh_button(label, user_id=none, class_id=none) %}
+<form method="post" action="{{ url_for('admin_sync_semesters') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+  {% if user_id is not none %}<input type="hidden" name="user_id" value="{{ user_id }}" />{% endif %}
+  {% if class_id is not none %}<input type="hidden" name="class_id" value="{{ class_id }}" />{% endif %}
+  <button type="submit" class="btn btn-sm" {% if active_job %}disabled{% endif %}>{{ label }}</button>
+</form>
+{% endmacro %}
+<div class="section-stack">
+  <section class="card">
+    <p class="meta">Admin</p>
+    <h1 class="card-title mt-2">Previous-semester grades</h1>
+    <p class="card-subtitle">Import history for everyone, one student, or one semester. Current-semester monitoring continues separately. Importing grades does not publish them or change consent.</p>
+    <div class="mt-4">{{ refresh_button('Refresh history for everyone') }}</div>
+    {% if stalled %}<p class="alert alert-warning mt-4">The previous refresh stopped reporting progress. Use a refresh button to retry.</p>{% endif %}
+  </section>
+  {% if jobs %}
+  <section class="card">
+    <h2 class="card-title">Recent refreshes</h2>
+    {% for job in jobs %}
+    <div class="mt-4">
+      <p><strong>{{ job.status.replace('_', ' ').title() }}</strong> — {{ job.completed }} semesters refreshed; {{ job.failed }} failures.</p>
+      <p class="meta">{{ job.created_at }} UTC · {{ 'Everyone' if job.user_id is none else 'Student #' ~ job.user_id }}{% if job.class_id %} · {{ class_display_name(job.class_id) }}{% endif %}</p>
+      {% for error in job_details[job.id] %}
+      <p class="text-sm mt-2">{% if error.user_id %}Student #{{ error.user_id }}: {% endif %}{% if error.class_id %}{{ class_display_name(error.class_id) }} — {% endif %}{{ error.message }}</p>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% if active_job %}<p class="card-subtitle mt-4">Refresh is running in the background. This page updates automatically.</p>{% endif %}
+  </section>
+  {% endif %}
+  {% for student in users %}
+  <section class="card" id="student-{{ student.id }}">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2 class="card-title">{{ student.username }}</h2>
+        <p class="card-subtitle">{{ 'ULFG connection saved' if student.ul_cookie else 'Student must reconnect to ULFG' }}</p>
+      </div>
+      {{ refresh_button('Refresh this student’s history', student.id) }}
+    </div>
+    <div class="table-wrap mt-4">
+      <table class="table">
+        <thead><tr><th>Semester</th><th>Last imported (UTC)</th><th>Action</th></tr></thead>
+        <tbody>
+          {% for semester in student.semesters|sort(attribute='class_id') %}
+          <tr>
+            <td>{{ class_display_name(semester.class_id) }}{% if semester.class_id == student.ul_class_id %} <span class="badge">Current</span>{% endif %}</td>
+            <td>{{ semester.synced_at or 'Not imported' }}</td>
+            <td>{% if semester.class_id != student.ul_class_id %}{{ refresh_button('Refresh semester', student.id, semester.class_id) }}{% else %}<span class="text-text-mute">Monitored automatically</span>{% endif %}</td>
+          </tr>
+          {% else %}<tr><td colspan="3">No semesters discovered yet. Refresh this student's history to load the list.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% else %}<p class="empty-state">No student accounts yet.</p>{% endfor %}
+</div>
+{% if active_job %}<script>window.setTimeout(() => window.location.reload(), 5000);</script>{% endif %}
+{% endblock %}

@@ -39,6 +39,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect, FlaskForm
 from sqlalchemy import event, func, or_, text
 from sqlalchemy.orm import relationship
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from wtforms import BooleanField, PasswordField, StringField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, EqualTo, Length
@@ -181,6 +182,20 @@ class StudentSemester(db.Model):
     class_id = db.Column(db.String(64), primary_key=True)
     snapshot = db.Column(db.Text, nullable=True)
     synced_at = db.Column(db.DateTime, nullable=True)
+
+
+class SemesterSyncJob(db.Model):
+    __tablename__ = "semester_sync_jobs"
+    id = db.Column(db.Integer, primary_key=True)
+    active_key = db.Column(db.String(32), unique=True, nullable=True)
+    status = db.Column(db.String(32), nullable=False, default="queued")
+    user_id = db.Column(db.Integer, nullable=True)
+    class_id = db.Column(db.String(64), nullable=True)
+    completed = db.Column(db.Integer, nullable=False, default=0)
+    failed = db.Column(db.Integer, nullable=False, default=0)
+    details = db.Column(db.Text, nullable=False, default="[]")
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class Grade(db.Model):
@@ -508,14 +523,25 @@ def normalize_language(raw: Any) -> str | None:
     return "english" if str(raw).strip().lower() == "english" else "french"
 
 
+def class_label(value: Any) -> str | None:
+    """ULFG returns majors as either labels or nested objects."""
+    if isinstance(value, dict):
+        for key in ("name", "nameEnglish", "code", "value", "id"):
+            label = class_label(value.get(key))
+            if label:
+                return label
+        return None
+    return str(value) if isinstance(value, (str, int, float)) else None
+
+
 def build_class_name(payload: dict[str, Any]) -> str | None:
     """Year 2 - Spring - Major - Branch 3   (the major segment is dropped when null)."""
     definition = payload.get("definition") if isinstance(payload.get("definition"), dict) else {}
     branch = payload.get("branch") if isinstance(payload.get("branch"), dict) else {}
 
     year = definition.get("year")
-    half = definition.get("half")
-    major = definition.get("major")
+    half = class_label(definition.get("half"))
+    major = class_label(definition.get("major"))
     branch_number = branch.get("number")
 
     parts: list[str] = []
@@ -589,10 +615,10 @@ def ensure_class_record(class_id: str, user: User, payload: dict | None = None) 
     branch = payload.get("branch") if isinstance(payload.get("branch"), dict) else {}
     record.name = name
     record.year = coerce_int(definition.get("year"))
-    record.half = definition.get("half")
-    record.major = definition.get("major")
+    record.half = class_label(definition.get("half"))
+    record.major = class_label(definition.get("major"))
     record.branch_number = coerce_int(branch.get("number"))
-    record.branch_name = branch.get("name")
+    record.branch_name = class_label(branch.get("name"))
     record.language = normalize_language(payload.get("language"))
     academic_year = payload.get("academicYear") or payload.get("academic_year") or payload.get("year")
     if isinstance(academic_year, (str, int)) and len(str(academic_year)) >= 4:
@@ -1551,40 +1577,156 @@ def sync_semester(user: User, class_id: str) -> bool:
     return True
 
 
-def import_missing_semesters(user: User) -> int:
-    failures = 0
-    for enrollment in StudentSemester.query.filter_by(user_id=user.id, synced_at=None).all():
-        try:
-            if not sync_semester(user, enrollment.class_id):
-                failures += 1
-        except Exception:
-            db.session.rollback()
-            failures += 1
-    return failures
-
-
 @app.route("/semesters/sync", methods=["POST"])
 @login_required
 def sync_semesters():
-    if current_user.is_admin:
+    # Retired student endpoint: do not allow old forms to trigger historical imports.
+    abort(403)
+
+
+def semester_sync_error(exc: Exception) -> str:
+    """Only safe operational messages; never persist raw exceptions or SQL parameters."""
+    if isinstance(exc, ULIdentityBootstrapError):
+        return str(exc)
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "ULFG timed out. Retry later."
+    if isinstance(exc, requests.exceptions.RequestException):
+        return "Could not connect to ULFG. Retry later."
+    return f"Refresh failed ({type(exc).__name__}). Saved grades were kept."
+
+
+def run_semester_sync_job(job_id: int) -> None:
+    with app.app_context():
+        job = db.session.get(SemesterSyncJob, job_id)
+        if not job or job.status != "queued":
+            return
+        job.status = "running"
+        job.updated_at = now_utc()
+        db.session.commit()
+        details = []
+
+        def report(uid: int, cid: str | None, error: str | None = None) -> None:
+            current_job = db.session.get(SemesterSyncJob, job_id)
+            if error:
+                current_job.failed += 1
+                details.append({"user_id": uid, "class_id": cid, "message": error})
+                current_job.details = json.dumps(details)
+            else:
+                current_job.completed += 1
+            current_job.updated_at = now_utc()
+            db.session.commit()
+
+        try:
+            query = User.query.filter(User.is_admin.is_(False))
+            if job.user_id is not None:
+                query = query.filter_by(id=job.user_id)
+            user_ids = [user.id for user in query.order_by(User.id).all()]
+            selected_class = job.class_id
+            for uid in user_ids:
+                db.session.refresh(job)
+                if job.status != "running":
+                    return
+                job.updated_at = now_utc()
+                db.session.commit()
+                user = db.session.get(User, uid)
+                if user is None:
+                    continue
+                try:
+                    if not user.ul_cookie:
+                        raise ULIdentityBootstrapError("No ULFG cookie saved. The student must reconnect their account.")
+                    if selected_class is None:
+                        ensure_ul_identity_from_cookie(user, force=True)
+                    enrollments = StudentSemester.query.filter(
+                        StudentSemester.user_id == uid,
+                        StudentSemester.class_id != user.ul_class_id,
+                    )
+                    if selected_class is not None:
+                        enrollments = enrollments.filter_by(class_id=selected_class)
+                    class_ids = [row.class_id for row in enrollments.all()]
+                except Exception as exc:
+                    db.session.rollback()
+                    report(uid, None, semester_sync_error(exc))
+                    continue
+                for cid in class_ids:
+                    try:
+                        user = db.session.get(User, uid)
+                        if user is None:
+                            break
+                        if sync_semester(user, cid):
+                            report(uid, cid)
+                        else:
+                            report(uid, cid, "ULFG did not return valid grades. Check the student's connection and retry.")
+                    except Exception as exc:
+                        db.session.rollback()
+                        report(uid, cid, semester_sync_error(exc))
+            job = db.session.get(SemesterSyncJob, job_id)
+            job.status = "completed" if not job.failed else "completed_with_errors"
+        except Exception as exc:
+            db.session.rollback()
+            job = db.session.get(SemesterSyncJob, job_id)
+            job.status = "failed"
+            job.failed += 1
+            details.append({"user_id": None, "class_id": None, "message": semester_sync_error(exc)})
+            job.details = json.dumps(details)
+        finally:
+            job.active_key = None
+            job.updated_at = now_utc()
+            db.session.commit()
+            db.session.remove()
+
+
+@app.route("/admin/semesters")
+@login_required
+def admin_semesters():
+    if not is_admin_user():
         abort(403)
+    users = User.query.filter(User.is_admin.is_(False)).order_by(User.username).all()
+    jobs = SemesterSyncJob.query.order_by(SemesterSyncJob.id.desc()).limit(5).all()
+    active_job = SemesterSyncJob.query.filter_by(active_key="history").first()
+    stalled = bool(active_job and active_job.updated_at.replace(tzinfo=timezone.utc) < now_utc() - timedelta(minutes=10))
+    if stalled:
+        active_job = None  # The next POST can reclaim an interrupted worker's lease.
+    return render_template("admin/semesters.html", users=users, jobs=jobs,
+                           active_job=active_job, stalled=stalled,
+                           job_details={job.id: json.loads(job.details) for job in jobs})
+
+
+@app.route("/admin/semesters/sync", methods=["POST"])
+@login_required
+def admin_sync_semesters():
+    if not is_admin_user():
+        abort(403)
+    uid = request.form.get("user_id")
+    cid = request.form.get("class_id") or None
+    user = None
+    if uid:
+        user = db.session.get(User, coerce_int(uid))
+        if user is None or user.is_admin:
+            abort(404)
+    if cid and (user is None or cid == user.ul_class_id or
+                db.session.get(StudentSemester, (user.id, cid)) is None):
+        abort(404)
+    SemesterSyncJob.query.filter(
+        SemesterSyncJob.active_key == "history",
+        SemesterSyncJob.updated_at < now_utc() - timedelta(minutes=10),
+    ).update({"active_key": None, "status": "interrupted"})
+    job = SemesterSyncJob(active_key="history", user_id=user.id if user else None, class_id=cid)
+    db.session.add(job)
     try:
-        ensure_ul_identity_from_cookie(current_user, force=True)
-        failures = 0
-        for enrollment in StudentSemester.query.filter_by(user_id=current_user.id).all():
-            try:
-                if not sync_semester(current_user, enrollment.class_id):
-                    failures += 1
-            except Exception:
-                db.session.rollback()
-                failures += 1
-        flash("Semesters refreshed." if not failures else
-              f"Semester list refreshed; {failures} semester(s) could not be fetched. Saved grades were kept. Please retry.",
-              "success" if not failures else "warning")
-    except Exception:
+        db.session.commit()
+    except IntegrityError:
         db.session.rollback()
-        flash("Could not refresh semesters. Check your ULFG connection and try again. Saved grades were kept.", "error")
-    return redirect(url_for("dashboard"))
+        flash("A history refresh is already running. Please wait for it to finish.", "warning")
+        return redirect(url_for("admin_semesters"))
+    try:
+        socketio.start_background_task(run_semester_sync_job, job.id)
+    except Exception:
+        job.status = "failed"
+        job.active_key = None
+        job.failed = 1
+        job.details = json.dumps([{"user_id": None, "class_id": None, "message": "Could not start refresh. Please retry."}])
+        db.session.commit()
+    return redirect(url_for("admin_semesters"))
 
 
 def latest_class_id_from_payload(payload: Any) -> str | None:
@@ -2650,14 +2792,14 @@ def dashboard():
         if not checked or (now_utc() - checked.replace(tzinfo=timezone.utc)).total_seconds() > 86400:
             try:
                 ensure_ul_identity_from_cookie(current_user, force=True)
-            except Exception:
+            except Exception as exc:
                 db.session.rollback()
-                flash("Could not refresh the semester list. Showing saved grades.", "warning")
+                flash(f"Could not refresh the semester list: {semester_sync_error(exc)} Showing saved grades.", "warning")
     cid = selected_semester(current_user)
     if not cid:
         return redirect(url_for("update_cookie"))
-    if current_user.ul_cookie and import_missing_semesters(current_user):
-        flash("Some semesters could not be imported. Use Refresh all semesters to retry. Saved grades were kept.", "warning")
+    if cid == current_user.ul_class_id:
+        ensure_dashboard_snapshot(current_user)
     context = dashboard_context(current_user, cid)
     consent_form = ConsentForm(hostage_consent=current_user.hostage_consent)
     return render_template("dashboard.html", **context, consent_form=consent_form)

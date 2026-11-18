@@ -111,6 +111,27 @@ Defined by `StudentSemester`:
 | `snapshot` | `TEXT` | Nullable; last imported payload |
 | `synced_at` | `DATETIME` | Nullable; last successful import |
 
+### `semester_sync_jobs`
+
+Defined by `SemesterSyncJob`; records admin-requested background history imports.
+
+| Column | Type | Constraints / notes |
+|---|---|---|
+| `id` | `INTEGER` | Primary key |
+| `active_key` | `VARCHAR(32)` | Unique, nullable; `history` while active |
+| `status` | `VARCHAR(32)` | Not null; queued, running, completed, completed_with_errors, failed, or interrupted |
+| `user_id` | `INTEGER` | Nullable; selected student, or all students when null |
+| `class_id` | `VARCHAR(64)` | Nullable; selected semester, or all historical enrollments when null |
+| `completed` | `INTEGER` | Not null; default 0 |
+| `failed` | `INTEGER` | Not null; default 0 |
+| `details` | `TEXT` | Not null; JSON array of safe errors, without grades or credentials |
+| `created_at` | `DATETIME` | Not null; UTC default |
+| `updated_at` | `DATETIME` | Not null; progress heartbeat |
+
+The unique active key prevents simultaneous history jobs across workers. Completed
+jobs release the key. A new admin request can reclaim a key after ten minutes
+without progress. User IDs here are operational references, not foreign keys.
+
 ### `semester_grades`
 
 Defined by `Grade`:
