@@ -2,12 +2,12 @@
 
 **Source file:** `app.py`  
 **Repository:** `MhmdMC/ul_grades`  
-**Source commit:** `0bc74372c87eafce2583bf58bbbf1ff9314ea232`
+**Version:** semester-aware schema
 
 ## 1. Database configuration
 
 ```python
-DB_FILE = BASE_DIR / "ul_grades.sqlite3"
+DB_FILE = Path(os.environ.get("DATABASE_PATH", str(BASE_DIR / "ul_grades.sqlite3")))
 
 app.config.update(
     SQLALCHEMY_DATABASE_URI=f"sqlite:///{DB_FILE}",
@@ -37,6 +37,7 @@ Defined by `SchoolClass`:
 | `branch_number` | `INTEGER` | Nullable |
 | `branch_name` | `VARCHAR(255)` | Nullable |
 | `language` | `VARCHAR(16)` | Nullable |
+| `academic_year` | `VARCHAR(64)` | Nullable; distinguishes academic cohorts |
 | `updated_at` | `DATETIME` | Not null; UTC default |
 
 ### `groups`
@@ -75,6 +76,7 @@ Defined by `User`:
 | `created_at` | `DATETIME` | Not null; UTC default |
 | `updated_at` | `DATETIME` | Not null; UTC default and updated automatically |
 | `last_seen_at` | `DATETIME` | Nullable |
+| `semesters_checked_at` | `DATETIME` | Nullable; last enrollment discovery |
 | `is_admin` | `BOOLEAN` | Not null; default `False` |
 | `hostage_consent` | `BOOLEAN` | Not null; default `False` |
 | `force_password_change` | `BOOLEAN` | Not null; default `False` |
@@ -98,7 +100,18 @@ Defined by `EncryptionSentinel`:
 | `id` | `INTEGER` | Primary key |
 | `value` | `TEXT` | Not null |
 
-### `grades`
+### `student_semesters`
+
+Defined by `StudentSemester`:
+
+| Column | Type | Constraints / notes |
+|---|---|---|
+| `user_id` | `INTEGER` | Composite primary key; foreign key to `users.id` |
+| `class_id` | `VARCHAR(64)` | Composite primary key |
+| `snapshot` | `TEXT` | Nullable; last imported payload |
+| `synced_at` | `DATETIME` | Nullable; last successful import |
+
+### `semester_grades`
 
 Defined by `Grade`:
 
@@ -107,6 +120,7 @@ Defined by `Grade`:
 | `id` | `INTEGER` | Primary key |
 | `user_id` | `INTEGER` | Foreign key to `users.id`; not null; indexed |
 | `material_id` | `VARCHAR(64)` | Not null |
+| `class_id` | `VARCHAR(64)` | Not null; indexed |
 | `partial` | `FLOAT` | Nullable |
 | `partial_rank` | `INTEGER` | Nullable |
 | `final` | `FLOAT` | Nullable |
@@ -117,25 +131,26 @@ Defined by `Grade`:
 Additional constraint:
 
 ```sql
-UNIQUE (user_id, material_id)
+UNIQUE (user_id, class_id, material_id)
 ```
 
 Constraint name: `uq_grades_user_material`.
 
-### `grade_averages`
+### `semester_grade_averages`
 
 Defined by `GradeAverage`:
 
 | Column | Type | Constraints / notes |
 |---|---|---|
 | `user_id` | `INTEGER` | Primary key and foreign key to `users.id` |
+| `class_id` | `VARCHAR(64)` | Part of composite primary key with `user_id` |
 | `partial_average` | `FLOAT` | Nullable |
 | `partial_rank` | `INTEGER` | Nullable |
 | `final_average` | `FLOAT` | Nullable |
 | `final_rank` | `INTEGER` | Nullable |
 | `updated_at` | `DATETIME` | Not null; UTC default |
 
-### `public_shares`
+### `semester_public_shares`
 
 Defined by `PublicShare`:
 
@@ -143,11 +158,12 @@ Defined by `PublicShare`:
 |---|---|---|
 | `user_id` | `INTEGER` | Part of composite primary key; foreign key to `users.id` |
 | `item_key` | `VARCHAR(120)` | Part of composite primary key |
+| `class_id` | `VARCHAR(64)` | Part of composite primary key |
 
 The primary key is composite:
 
 ```sql
-PRIMARY KEY (user_id, item_key)
+PRIMARY KEY (user_id, class_id, item_key)
 ```
 
 ### `materials`
@@ -236,9 +252,17 @@ ALTER TABLE users ADD COLUMN hostage_consent BOOLEAN NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN force_password_change BOOLEAN NOT NULL DEFAULT 0;
 ALTER TABLE groups ADD COLUMN class_id VARCHAR(64);
 ALTER TABLE classes ADD COLUMN language VARCHAR(16);
+ALTER TABLE classes ADD COLUMN academic_year VARCHAR(64);
+ALTER TABLE users ADD COLUMN semesters_checked_at DATETIME;
 ```
 
 They are executed conditionally only when the relevant column does not already exist.
+
+`migrate_semester_data()` copies legacy `grades`, `grade_averages`, and
+`public_shares` into the semester tables using `users.ul_class_id`. It records
+completion in `settings.semester_migration_v1`. Original tables remain available
+for recovery and are no longer used for live data. Deleting a user removes their
+rows from both the new tables and any legacy recovery tables.
 
 ## 5. Startup order
 
@@ -248,13 +272,15 @@ At application startup, the following block runs:
 with app.app_context():
     db.create_all()
     ensure_user_name_column()
+    migrate_semester_data()
     bootstrap_materials()
     ensure_admin_account()
     _encrypt_legacy_data()
     _verify_or_seal(app, db)
     backfill_stored_grades()
     backfill_class_names()
-    start_background_services()
+    if os.environ.get("DISABLE_BACKGROUND_SERVICES") != "1":
+        start_background_services()
 ```
 
 The schema-related operations are:
@@ -275,9 +301,10 @@ The foreign keys declared in `app.py` are:
 groups.representative_user_id -> users.id
 users.group_id                -> groups.id
 ul_credentials.user_id       -> users.id
-grades.user_id               -> users.id
-grade_averages.user_id       -> users.id
-public_shares.user_id        -> users.id
+student_semesters.user_id    -> users.id
+semester_grades.user_id      -> users.id
+semester_grade_averages.user_id -> users.id
+semester_public_shares.user_id -> users.id
 logs.user_id                 -> users.id
 logs.group_id                -> groups.id
 ```
@@ -302,7 +329,7 @@ Index on `groups.class_id`.
 user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
 ```
 
-Index on `grades.user_id`.
+Indexes on `semester_grades.user_id` and `semester_grades.class_id`.
 
 ```python
 username = db.Column(db.String(80), nullable=True, index=True)
@@ -312,11 +339,11 @@ Index on `failed_logins.username`.
 
 ```python
 __table_args__ = (
-    db.UniqueConstraint("user_id", "material_id", name="uq_grades_user_material"),
+    db.UniqueConstraint("user_id", "class_id", "material_id", name="uq_grades_user_material"),
 )
 ```
 
-Unique `(user_id, material_id)` pairs in `grades`.
+Unique `(user_id, class_id, material_id)` tuples in `semester_grades`.
 
 ## 8. Important distinction
 

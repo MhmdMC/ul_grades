@@ -529,8 +529,14 @@
     element.classList.toggle("is-missing", missing);
   }
 
+  const semesterDashboard = document.getElementById("semester-dashboard");
+  const historicalDashboard = semesterDashboard?.dataset.historical === "true";
+  function matchesSemester(payload) {
+    return !historicalDashboard && (!semesterDashboard ||
+      (payload?.class_id && String(payload.class_id) === semesterDashboard.dataset.semester));
+  }
   function updateDashboard(payload) {
-    if (!payload) return;
+    if (!payload || !matchesSemester(payload)) return;
     if (studentName && payload.student_name)
       studentName.textContent = payload.student_name;
     if (lastUpdate && payload.updated_at)
@@ -548,7 +554,7 @@
 
   async function refreshDashboard() {
     try {
-      const response = await fetch("/api/dashboard", {
+      const response = await fetch(`/api/dashboard${window.location.search}`, {
         headers: { "X-CSRFToken": csrfToken },
       });
       if (!response.ok) return;
@@ -654,6 +660,7 @@
       playAlarm(data?.seconds || 3);
     });
     socket.on("dashboard_payload", (payload) => {
+      if (!matchesSemester(payload)) return;
       updateDashboard(payload);
       pipManager.update({
         studentName: payload.student_name,
@@ -664,6 +671,7 @@
       });
     });
     socket.on("grade_change", (payload) => {
+      if (historicalDashboard || (!payload.is_test && !matchesSemester(payload))) return;
       if (!payload.is_test) updateDashboard(payload);
       const firstChange = payload?.changes?.[0];
       if (firstChange?.course?.key && !payload.is_test)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import requests
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -36,7 +37,7 @@ from flask_limiter.util import get_remote_address
 from flask_socketio import SocketIO, join_room
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect, FlaskForm
-from sqlalchemy import func, or_, text
+from sqlalchemy import event, func, or_, text
 from sqlalchemy.orm import relationship
 from werkzeug.security import check_password_hash, generate_password_hash
 from wtforms import BooleanField, PasswordField, StringField, SubmitField, TextAreaField
@@ -53,7 +54,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR = Path(__file__).resolve().parent
 MATERIALS_FILE = BASE_DIR / "materials.json"
-DB_FILE = BASE_DIR / "ul_grades.sqlite3"
+DB_FILE = Path(os.environ.get("DATABASE_PATH", str(BASE_DIR / "ul_grades.sqlite3")))
 
 UL_COOKIE_NAME = ".AspNetCore.Identity.Application"
 UL_BASE_URL = os.environ.get("UL_BASE_URL", "http://www.ulfg.ul.edu.lb")
@@ -109,6 +110,7 @@ class SchoolClass(db.Model):
     # a non-English one; we normalize the latter to "french" regardless of what
     # the API calls it.
     language = db.Column(db.String(16), nullable=True)
+    academic_year = db.Column(db.String(64), nullable=True)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -145,6 +147,7 @@ class User(UserMixin, db.Model):
     last_snapshot = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    semesters_checked_at = db.Column(db.DateTime, nullable=True)
     last_seen_at = db.Column(db.DateTime, nullable=True)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     hostage_consent = db.Column(db.Boolean, default=False, nullable=False)
@@ -152,8 +155,9 @@ class User(UserMixin, db.Model):
 
     group = relationship("Group", back_populates="users", foreign_keys=[group_id])
     ul_credential = relationship("ULCredential", uselist=False, cascade="all, delete-orphan", passive_deletes=False)
+    semesters = relationship("StudentSemester", cascade="all, delete-orphan")
     grades = relationship("Grade", cascade="all, delete-orphan", back_populates="user")
-    grade_average = relationship("GradeAverage", uselist=False, cascade="all, delete-orphan")
+    grade_average = relationship("GradeAverage", cascade="all, delete-orphan")
     public_shares = relationship("PublicShare", cascade="all, delete-orphan")
 
 
@@ -171,13 +175,21 @@ class EncryptionSentinel(db.Model):
     value = db.Column(db.Text, nullable=False)
 
 
-class Grade(db.Model):
-    """One row per (user, material). The stored copy is what the UI reads, so a
-    page view never costs a ULFG API call - only the poller writes here."""
+class StudentSemester(db.Model):
+    __tablename__ = "student_semesters"
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
+    class_id = db.Column(db.String(64), primary_key=True)
+    snapshot = db.Column(db.Text, nullable=True)
+    synced_at = db.Column(db.DateTime, nullable=True)
 
-    __tablename__ = "grades"
+
+class Grade(db.Model):
+    """One row per (user, semester, material), shared by monitoring and history."""
+
+    __tablename__ = "semester_grades"
 
     id = db.Column(db.Integer, primary_key=True)
+    class_id = db.Column(db.String(64), nullable=False, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     material_id = db.Column(db.String(64), nullable=False)
     partial = db.Column(db.Float, nullable=True)
@@ -189,12 +201,13 @@ class Grade(db.Model):
 
     user = relationship("User", back_populates="grades")
 
-    __table_args__ = (db.UniqueConstraint("user_id", "material_id", name="uq_grades_user_material"),)
+    __table_args__ = (db.UniqueConstraint("user_id", "class_id", "material_id", name="uq_grades_user_material"),)
 
 
 class GradeAverage(db.Model):
-    __tablename__ = "grade_averages"
+    __tablename__ = "semester_grade_averages"
 
+    class_id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
     partial_average = db.Column(db.Float, nullable=True)
     partial_rank = db.Column(db.Integer, nullable=True)
@@ -206,8 +219,9 @@ class GradeAverage(db.Model):
 class PublicShare(db.Model):
     """Presence of a row means that one item is public. No row means private."""
 
-    __tablename__ = "public_shares"
+    __tablename__ = "semester_public_shares"
 
+    class_id = db.Column(db.String(64), primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
     item_key = db.Column(db.String(120), primary_key=True)
 
@@ -444,6 +458,8 @@ def bootstrap_materials() -> None:
 
 def ensure_user_name_column() -> None:
     columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(users)"))}
+    if "semesters_checked_at" not in columns:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN semesters_checked_at DATETIME"))
     if "ul_name" not in columns:
         db.session.execute(text("ALTER TABLE users ADD COLUMN ul_name VARCHAR(255)"))
     if "hostage_consent" not in columns:
@@ -456,6 +472,8 @@ def ensure_user_name_column() -> None:
         db.session.execute(text("ALTER TABLE groups ADD COLUMN class_id VARCHAR(64)"))
 
     class_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(classes)"))}
+    if "academic_year" not in class_columns:
+        db.session.execute(text("ALTER TABLE classes ADD COLUMN academic_year VARCHAR(64)"))
     if "language" not in class_columns:
         db.session.execute(text("ALTER TABLE classes ADD COLUMN language VARCHAR(16)"))
     db.session.commit()
@@ -515,15 +533,13 @@ def build_class_name(payload: dict[str, Any]) -> str | None:
 
 def _class_payload_from_classes_list(classes_payload: Any, class_id: str) -> dict | None:
     """Extract the matching class entry dict from a get_student_classes response."""
-    if not isinstance(classes_payload, list):
-        return None
-    for entry in classes_payload:
+    for entry in class_entries(classes_payload):
         if not isinstance(entry, dict):
             continue
-        entry_id = entry.get("classId") or (entry.get("class") or {}).get("id")
+        class_info = entry.get("class") if isinstance(entry.get("class"), dict) else entry
+        entry_id = entry.get("classId") or class_info.get("id")
         if entry_id is not None and str(entry_id) == str(class_id):
-            class_info = entry.get("class")
-            return class_info if isinstance(class_info, dict) else None
+            return {**entry, **class_info}
     return None
 
 
@@ -538,7 +554,7 @@ def ensure_class_record(class_id: str, user: User, payload: dict | None = None) 
         return None
 
     record = db.session.get(SchoolClass, str(class_id))
-    if record and record.language:
+    if record and record.language and payload is None:
         return record
 
     if not user.ul_student_id or not user.ul_cookie:
@@ -578,6 +594,10 @@ def ensure_class_record(class_id: str, user: User, payload: dict | None = None) 
     record.branch_number = coerce_int(branch.get("number"))
     record.branch_name = branch.get("name")
     record.language = normalize_language(payload.get("language"))
+    academic_year = payload.get("academicYear") or payload.get("academic_year") or payload.get("year")
+    if isinstance(academic_year, (str, int)) and len(str(academic_year)) >= 4:
+        record.academic_year = str(academic_year)
+        record.name = f"{name} ({record.academic_year})"
     record.updated_at = now_utc()
     db.session.commit()
 
@@ -614,8 +634,9 @@ def languages_in_use() -> set[str]:
     stay data-driven and only appear when there is a real choice to make."""
     class_ids = {
         row[0]
-        for row in db.session.query(User.ul_class_id)
-        .filter(User.ul_class_id.isnot(None), User.is_admin.is_(False))
+        for row in db.session.query(StudentSemester.class_id)
+        .join(User, User.id == StudentSemester.user_id)
+        .filter(User.is_admin.is_(False))
         .distinct()
         if row[0]
     }
@@ -997,9 +1018,10 @@ def coerce_int(value: Any) -> int | None:
         return None
 
 
-def persist_snapshot(user: User, normalized: dict[str, Any]) -> None:
+def persist_snapshot(user: User, normalized: dict[str, Any], class_id: str | None = None) -> None:
     """Write a freshly fetched snapshot into the grades tables."""
-    existing = {grade.material_id: grade for grade in Grade.query.filter_by(user_id=user.id).all()}
+    class_id = class_id or user.ul_class_id
+    existing = {grade.material_id: grade for grade in Grade.query.filter_by(user_id=user.id, class_id=class_id).all()}
     seen: set[str] = set()
 
     for course in normalized.get("courses", []):
@@ -1009,7 +1031,7 @@ def persist_snapshot(user: User, normalized: dict[str, Any]) -> None:
         seen.add(material_id)
         grade = existing.get(material_id)
         if grade is None:
-            grade = Grade(user_id=user.id, material_id=material_id)
+            grade = Grade(user_id=user.id, class_id=class_id, material_id=material_id)
             db.session.add(grade)
         grade.partial = coerce_float(course.get("partial"))
         grade.partial_rank = coerce_int(course.get("partial_rank"))
@@ -1022,9 +1044,9 @@ def persist_snapshot(user: User, normalized: dict[str, Any]) -> None:
         if material_id not in seen:
             db.session.delete(grade)
 
-    average = GradeAverage.query.filter_by(user_id=user.id).first()
+    average = GradeAverage.query.filter_by(user_id=user.id, class_id=class_id).first()
     if average is None:
-        average = GradeAverage(user_id=user.id)
+        average = GradeAverage(user_id=user.id, class_id=class_id)
         db.session.add(average)
     average.partial_average = coerce_float(normalized.get("average"))
     average.partial_rank = coerce_int(normalized.get("overall_rank"))
@@ -1032,16 +1054,22 @@ def persist_snapshot(user: User, normalized: dict[str, Any]) -> None:
     average.final_rank = coerce_int(normalized.get("final_rank"))
     average.updated_at = now_utc()
 
+    semester = db.session.get(StudentSemester, (user.id, class_id))
+    if semester is None:
+        semester = StudentSemester(user_id=user.id, class_id=class_id)
+        db.session.add(semester)
+    semester.snapshot = json.dumps(normalized.get("raw") or normalized, ensure_ascii=False)
+    semester.synced_at = now_utc()
     db.session.commit()
 
 
-def stored_snapshot(user: User) -> dict[str, Any] | None:
+def stored_snapshot(user: User, class_id: str | None = None) -> dict[str, Any] | None:
     """Rebuild a normalized snapshot from the database. Never calls the ULFG API."""
-    grades = Grade.query.filter_by(user_id=user.id).order_by(Grade.material_id.asc()).all()
-    if not grades:
+    class_id = class_id or user.ul_class_id
+    grades = Grade.query.filter_by(user_id=user.id, class_id=class_id).order_by(Grade.material_id.asc()).all()
+    average = GradeAverage.query.filter_by(user_id=user.id, class_id=class_id).first()
+    if not grades and average is None:
         return None
-
-    average = GradeAverage.query.filter_by(user_id=user.id).first()
     courses: list[dict[str, Any]] = []
     for grade in grades:
         lookup = material_lookup(grade.material_id)
@@ -1062,7 +1090,7 @@ def stored_snapshot(user: User) -> dict[str, Any] | None:
     return {
         "student_name": user.ul_name,
         "student_id": user.ul_student_id,
-        "class_id": user.ul_class_id,
+        "class_id": class_id,
         "average": average.partial_average if average else None,
         "overall_rank": average.partial_rank if average else None,
         "final_average": average.final_average if average else None,
@@ -1073,24 +1101,27 @@ def stored_snapshot(user: User) -> dict[str, Any] | None:
     }
 
 
-def public_keys_for(user: User) -> set[str]:
-    return {row.item_key for row in PublicShare.query.filter_by(user_id=user.id).all()}
+def public_keys_for(user: User, class_id: str | None = None) -> set[str]:
+    class_id = class_id or user.ul_class_id
+    return {row.item_key for row in PublicShare.query.filter_by(user_id=user.id, class_id=class_id).all()}
 
 
-def allowed_share_keys(user: User) -> set[str]:
+def allowed_share_keys(user: User, class_id: str | None = None) -> set[str]:
     """The keys this user is actually allowed to publish, derived from their own grades."""
+    class_id = class_id or user.ul_class_id
     keys = {overall_share_key(field) for field, _ in OVERALL_SHARE_FIELDS}
-    normalized = stored_snapshot(user) or {}
+    normalized = stored_snapshot(user, class_id) or {}
     for course in normalized.get("courses", []):
         for field, _ in COURSE_SHARE_FIELDS:
             keys.add(course_share_key(course["key"], field))
     return keys
 
 
-def set_public_keys(user: User, keys: set[str]) -> None:
-    current = {row.item_key: row for row in PublicShare.query.filter_by(user_id=user.id).all()}
+def set_public_keys(user: User, keys: set[str], class_id: str | None = None) -> None:
+    class_id = class_id or user.ul_class_id
+    current = {row.item_key: row for row in PublicShare.query.filter_by(user_id=user.id, class_id=class_id).all()}
     for key in keys - set(current):
-        db.session.add(PublicShare(user_id=user.id, item_key=key))
+        db.session.add(PublicShare(user_id=user.id, class_id=class_id, item_key=key))
     for key in set(current) - keys:
         db.session.delete(current[key])
     db.session.commit()
@@ -1127,11 +1158,11 @@ def leaderboard_subjects(class_ids: list[str]) -> list[dict[str, Any]]:
     subjects: list[dict[str, Any]] = [{"id": OVERALL_SUBJECT, "name": "Overall average"}]
 
     ids = [str(c) for c in class_ids]
-    user_ids = [user.id for user in User.query.filter(User.ul_class_id.in_(ids), User.is_admin.is_(False)).all()]
+    user_ids = [user.id for user in User.query.join(StudentSemester, StudentSemester.user_id == User.id).filter(StudentSemester.class_id.in_(ids), User.is_admin.is_(False)).all()]
     if not user_ids:
         return subjects
 
-    material_ids = {grade.material_id for grade in Grade.query.filter(Grade.user_id.in_(user_ids)).all()}
+    material_ids = {grade.material_id for grade in Grade.query.filter(Grade.user_id.in_(user_ids), Grade.class_id.in_(ids)).all()}
     materials = sorted(
         ((material_id, material_lookup(material_id)) for material_id in material_ids),
         key=lambda item: str(item[1]["name"]).lower(),
@@ -1150,10 +1181,11 @@ def metric_key_for(subject: str, kind: str) -> str | None:
     return course_share_key(subject, kind)
 
 
-def metric_value_for_user(user: User, metric_key: str) -> float | None:
+def metric_value_for_user(user: User, metric_key: str, class_id: str | None = None) -> float | None:
+    class_id = class_id or user.ul_class_id
     if metric_key.startswith("overall:"):
         field = metric_key.split(":", 1)[1]
-        average = GradeAverage.query.filter_by(user_id=user.id).first()
+        average = GradeAverage.query.filter_by(user_id=user.id, class_id=class_id).first()
         if average is None:
             return None
         return {"partial_average": average.partial_average, "final_average": average.final_average}.get(field)
@@ -1163,7 +1195,7 @@ def metric_value_for_user(user: User, metric_key: str) -> float | None:
         if len(parts) != 3:
             return None
         _, material_id, field = parts
-        grade = Grade.query.filter_by(user_id=user.id, material_id=material_id).first()
+        grade = Grade.query.filter_by(user_id=user.id, class_id=class_id, material_id=material_id).first()
         if grade is None:
             return None
         if field == "partial":
@@ -1173,13 +1205,14 @@ def metric_value_for_user(user: User, metric_key: str) -> float | None:
     return None
 
 
-def metric_rank_for_user(user: User, metric_key: str) -> int | None:
+def metric_rank_for_user(user: User, metric_key: str, class_id: str | None = None) -> int | None:
     """The student's official ULFG rank for the metric a leaderboard column ranks
     by. Mirrors metric_value_for_user, but returns the rank that travels with the
     grade rather than the grade itself."""
+    class_id = class_id or user.ul_class_id
     if metric_key.startswith("overall:"):
         field = metric_key.split(":", 1)[1]
-        average = GradeAverage.query.filter_by(user_id=user.id).first()
+        average = GradeAverage.query.filter_by(user_id=user.id, class_id=class_id).first()
         if average is None:
             return None
         return {"partial_average": average.partial_rank, "final_average": average.final_rank}.get(field)
@@ -1189,7 +1222,7 @@ def metric_rank_for_user(user: User, metric_key: str) -> int | None:
         if len(parts) != 3:
             return None
         _, material_id, field = parts
-        grade = Grade.query.filter_by(user_id=user.id, material_id=material_id).first()
+        grade = Grade.query.filter_by(user_id=user.id, class_id=class_id, material_id=material_id).first()
         if grade is None:
             return None
         if field == "partial":
@@ -1208,15 +1241,17 @@ def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> li
     """
     viewer_is_admin = bool(getattr(viewer, "is_admin", False))
     ids = [str(c) for c in class_ids]
-    students = User.query.filter(User.ul_class_id.in_(ids), User.is_admin.is_(False)).all()
+    students = User.query.join(StudentSemester, StudentSemester.user_id == User.id).filter(StudentSemester.class_id.in_(ids), User.is_admin.is_(False)).all()
 
     rows: list[dict[str, Any]] = []
     for student in students:
-        value = metric_value_for_user(student, metric_key)
+        enrollment = StudentSemester.query.filter(StudentSemester.user_id == student.id, StudentSemester.class_id.in_(ids)).first()
+        class_id = enrollment.class_id
+        value = metric_value_for_user(student, metric_key, class_id)
         if value is None:
             continue
 
-        is_public = metric_key in public_keys_for(student)
+        is_public = metric_key in public_keys_for(student, class_id)
         is_self = student.id == viewer.id
         revealed = is_public or is_self or (viewer_is_admin and student.hostage_consent)
 
@@ -1238,11 +1273,11 @@ def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> li
                 "reveal_reason": reveal_reason,
                 "is_self": is_self,
                 "value": value,
-                "ul_rank": metric_rank_for_user(student, metric_key),
+                "ul_rank": metric_rank_for_user(student, metric_key, class_id),
                 "color": grade_color(value),
                 # A revealed name means that grade is already public, so linking
                 # to the profile exposes nothing new.
-                "profile_url": url_for("public_profile_page", username=student.username) if is_public else None,
+                "profile_url": url_for("public_profile_page", username=student.username, semester=class_id) if is_public else None,
             }
         )
 
@@ -1261,17 +1296,20 @@ def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> li
     return rows
 
 
-def viewable_profile(user: User, viewer: User) -> dict[str, Any] | None:
+def viewable_profile(user: User, viewer: User, class_id: str | None = None) -> dict[str, Any] | None:
     """The full grade sheet, with each field marked visible or hidden.
 
     A hidden field carries value=None: the real number never reaches the template,
     so it cannot be recovered from the HTML. The blur is only cosmetic.
     """
-    normalized = stored_snapshot(user)
+    class_id = class_id or user.ul_class_id
+    normalized = stored_snapshot(user, class_id)
     if normalized is None:
-        return None
+        if db.session.get(StudentSemester, (user.id, class_id)) is None:
+            return None
+        normalized = normalize_snapshot({"grades": []})
 
-    keys = public_keys_for(user)
+    keys = public_keys_for(user, class_id)
     is_self = viewer.id == user.id
     # Admins may additionally see the grades of students who consented at register.
     consent_override = bool(getattr(viewer, "is_admin", False)) and user.hostage_consent
@@ -1316,7 +1354,7 @@ def viewable_profile(user: User, viewer: User) -> dict[str, Any] | None:
         "user": user,
         "overall": overall,
         "courses": courses,
-        "class_name": class_display_name(user.ul_class_id),
+        "class_name": class_display_name(class_id),
         "visible_count": visible_count,
         "total_count": total_count,
         "revealed_by_consent": consent_override and not is_self,
@@ -1357,10 +1395,11 @@ def search_students(query: str, limit: int = 40, language: str = "both") -> list
     return results[:limit]
 
 
-def public_profile(user: User) -> dict[str, Any] | None:
+def public_profile(user: User, class_id: str | None = None) -> dict[str, Any] | None:
     """Only the items this user explicitly marked public. Returns None if nothing is shared."""
-    keys = public_keys_for(user)
-    normalized = stored_snapshot(user)
+    class_id = class_id or user.ul_class_id
+    keys = public_keys_for(user, class_id)
+    normalized = stored_snapshot(user, class_id)
     if not keys or normalized is None:
         return None
 
@@ -1428,6 +1467,126 @@ def find_nested_string_value(payload: Any, candidate_keys: tuple[str, ...]) -> s
     return None
 
 
+def class_entries(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, dict)]
+    if isinstance(payload, dict):
+        for key in ("classes", "data", "results", "items"):
+            if key in payload:
+                return class_entries(payload[key])
+    return []
+
+
+def migrate_semester_data() -> None:
+    """Copy legacy data once. Keep the original tables intact for recovery."""
+    if db.session.get(Setting, "semester_migration_v1"):
+        return
+    tables = {row[0] for row in db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+    for old, new, fields in (
+        ("grades", "semester_grades", "material_id,partial,partial_rank,final,final_grade,final_rank,updated_at"),
+        ("grade_averages", "semester_grade_averages", "partial_average,partial_rank,final_average,final_rank,updated_at"),
+        ("public_shares", "semester_public_shares", "item_key"),
+    ):
+        if old in tables:
+            selected = ",".join("old." + field for field in fields.split(","))
+            db.session.execute(text(
+                f"INSERT OR IGNORE INTO {new} (user_id,class_id,{fields}) "
+                f"SELECT old.user_id,u.ul_class_id,{selected} FROM {old} old "
+                "JOIN users u ON u.id=old.user_id WHERE u.ul_class_id IS NOT NULL"
+            ))
+    for user in User.query.filter(User.ul_class_id.isnot(None)).all():
+        if db.session.get(StudentSemester, (user.id, user.ul_class_id)) is None:
+            db.session.add(StudentSemester(user_id=user.id, class_id=user.ul_class_id,
+                                          snapshot=user.last_snapshot, synced_at=user.last_successful_poll))
+    db.session.add(Setting(key="semester_migration_v1", value="done"))
+    db.session.commit()
+
+
+@event.listens_for(User, "before_delete")
+def delete_legacy_semester_rows(_mapper, connection, user) -> None:
+    # Migration recovery tables must obey account deletion too.
+    tables = {row[0] for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+    for table in ("grades", "grade_averages", "public_shares"):
+        if table in tables:
+            connection.execute(text(f"DELETE FROM {table} WHERE user_id=:uid"), {"uid": user.id})
+
+
+def selected_semester(user: User) -> str | None:
+    cid = request.args.get("semester") or user.ul_class_id
+    if cid != user.ul_class_id and db.session.get(StudentSemester, (user.id, cid)) is None:
+        abort(404)
+    return cid
+
+
+def semester_context(user: User, class_id: str | None) -> dict[str, Any]:
+    enrollments = StudentSemester.query.filter_by(user_id=user.id).all()
+    enrollments.sort(key=lambda row: (row.class_id == user.ul_class_id, class_display_name(row.class_id)), reverse=True)
+    return {
+        "semesters": [{"id": row.class_id, "name": class_display_name(row.class_id),
+                       "current": row.class_id == user.ul_class_id} for row in enrollments],
+        "selected_semester": class_id,
+        "semester_name": class_display_name(class_id),
+        "historical_semester": class_id != user.ul_class_id,
+    }
+
+
+def sync_semester(user: User, class_id: str) -> bool:
+    """Fetch one enrollment without changing the current class or its monitoring state."""
+    if not user.ul_cookie or db.session.get(StudentSemester, (user.id, class_id)) is None:
+        return False
+    response = ul_api.get_grades(user.ul_student_id, class_id, user.ul_cookie)
+    if response.status_code == 401 and refresh_cookie_from_credentials(user):
+        response = ul_api.get_grades(user.ul_student_id, class_id, user.ul_cookie)
+    if not 200 <= response.status_code < 300 or not isinstance(response.json_data, (dict, list)):
+        return False
+    if isinstance(response.json_data, dict) and not any(
+        key in response.json_data for key in ("courses", "grades", "items", "data", "results")
+    ):
+        return False
+    persist_snapshot(user, normalize_snapshot(response.json_data), class_id)
+    if class_id == user.ul_class_id:
+        user.last_snapshot = json.dumps(response.json_data, ensure_ascii=False)
+        user.last_successful_poll = now_utc()
+        db.session.commit()
+    return True
+
+
+def import_missing_semesters(user: User) -> int:
+    failures = 0
+    for enrollment in StudentSemester.query.filter_by(user_id=user.id, synced_at=None).all():
+        try:
+            if not sync_semester(user, enrollment.class_id):
+                failures += 1
+        except Exception:
+            db.session.rollback()
+            failures += 1
+    return failures
+
+
+@app.route("/semesters/sync", methods=["POST"])
+@login_required
+def sync_semesters():
+    if current_user.is_admin:
+        abort(403)
+    try:
+        ensure_ul_identity_from_cookie(current_user, force=True)
+        failures = 0
+        for enrollment in StudentSemester.query.filter_by(user_id=current_user.id).all():
+            try:
+                if not sync_semester(current_user, enrollment.class_id):
+                    failures += 1
+            except Exception:
+                db.session.rollback()
+                failures += 1
+        flash("Semesters refreshed." if not failures else
+              f"Semester list refreshed; {failures} semester(s) could not be fetched. Saved grades were kept. Please retry.",
+              "success" if not failures else "warning")
+    except Exception:
+        db.session.rollback()
+        flash("Could not refresh semesters. Check your ULFG connection and try again. Saved grades were kept.", "error")
+    return redirect(url_for("dashboard"))
+
+
 def latest_class_id_from_payload(payload: Any) -> str | None:
     if isinstance(payload, dict):
         for key in ("classes", "data", "results", "items"):
@@ -1446,7 +1605,7 @@ def latest_class_id_from_payload(payload: Any) -> str | None:
             if isinstance(class_info, dict):
                 class_id = class_info.get("id") or entry.get("classId")
             else:
-                class_id = entry.get("classId")
+                class_id = entry.get("classId") or entry.get("id")
             if class_id is not None:
                 return str(class_id)
     return None
@@ -1490,20 +1649,43 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
     if not latest_class_id:
         raise ULIdentityBootstrapError("ULFG classes response did not include any classes.")
 
+    try:
+        current_response = ul_api.get_current_class(student_username, user.ul_cookie)
+        if 200 <= current_response.status_code < 300 and isinstance(current_response.json_data, dict):
+            current_payload = current_response.json_data
+            current_info = current_payload.get("class") or current_payload
+            current_id = current_payload.get("classId") or current_info.get("id")
+            if current_id is not None:
+                latest_class_id = str(current_id)
+    except requests.exceptions.RequestException:
+        # Retain the classes-list fallback if the current-class endpoint is unavailable.
+        pass
     class_payload = _class_payload_from_classes_list(classes_response.json_data, latest_class_id)
 
+    if user.ul_class_id and user.last_snapshot and stored_snapshot(user) is None:
+        persist_snapshot(user, normalize_snapshot(json.loads(user.last_snapshot)))
     previous_group = user.group
     # Set the student id first: resolving the class name is a per-student UL call.
     user.ul_student_id = student_username
+    for entry in class_entries(classes_response.json_data):
+        info = {**entry, **entry["class"]} if isinstance(entry.get("class"), dict) else entry
+        cid = str(entry.get("classId") or info.get("id") or "")
+        if cid:
+            if db.session.get(StudentSemester, (user.id, cid)) is None:
+                db.session.add(StudentSemester(user_id=user.id, class_id=cid))
+            ensure_class_record(cid, user, payload=info)
     group = ensure_group_for_class(latest_class_id, user, class_payload=class_payload)
     if student_name:
         user.ul_name = student_name
     if str(user.ul_class_id or "") != str(latest_class_id):
         user.last_snapshot = None
     user.ul_class_id = latest_class_id
+    if db.session.get(StudentSemester, (user.id, latest_class_id)) is None:
+        db.session.add(StudentSemester(user_id=user.id, class_id=latest_class_id))
     user.group_id = group.id
     user.updated_at = now_utc()
     user.last_request_result = "ULFG identity refreshed"
+    user.semesters_checked_at = now_utc()
     group.paused = False
     if group.representative_user_id is None:
         group.representative_user_id = user.id
@@ -1583,6 +1765,7 @@ def emit_dashboard_refresh(user: User) -> None:
         "dashboard_payload",
         {
             "student_name": user.ul_name or normalized.get("student_name"),
+            "class_id": user.ul_class_id,
             "average": normalized.get("average"),
             "overall_rank": normalized.get("overall_rank"),
             "final_average": normalized.get("final_average"),
@@ -1703,7 +1886,7 @@ def fetch_and_compare_user(user: User, is_first_group_poll: bool = False) -> dic
     old_snapshot = json.loads(user.last_snapshot) if user.last_snapshot else None
     changes = compare_snapshots(old_snapshot, snapshot)
 
-    has_existing_grades = Grade.query.filter_by(user_id=user.id).first() is not None
+    has_existing_grades = Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first() is not None
 
     user.last_snapshot = json.dumps(payload, ensure_ascii=False)
     user.last_successful_poll = now_utc()
@@ -1919,14 +2102,15 @@ def is_admin_user() -> bool:
     return bool(current_user.is_authenticated and getattr(current_user, "is_admin", False))
 
 
-def dashboard_context(user: User) -> dict[str, Any]:
+def dashboard_context(user: User, class_id: str | None = None) -> dict[str, Any]:
+    class_id = class_id or user.ul_class_id
     group = user.group or (ensure_group_for_class(user.ul_class_id) if user.ul_class_id else None)
 
     # Read the stored copy. Falling back to last_snapshot only matters for a user
     # whose grades were fetched before the grades tables existed.
-    normalized = stored_snapshot(user)
+    normalized = stored_snapshot(user, class_id)
     if normalized is None:
-        raw = json.loads(user.last_snapshot) if user.last_snapshot else {"grades": []}
+        raw = json.loads(user.last_snapshot) if user.last_snapshot and class_id == user.ul_class_id else {"grades": []}
         normalized = normalize_snapshot(raw)
 
     courses = []
@@ -1948,7 +2132,7 @@ def dashboard_context(user: User) -> dict[str, Any]:
             }
         )
 
-    return {"user": user, "group": group, "snapshot": normalized, "courses": courses}
+    return {"user": user, "group": group, "snapshot": normalized, "courses": courses, **semester_context(user, class_id)}
 
 
 def ensure_dashboard_snapshot(user: User) -> None:
@@ -1957,7 +2141,7 @@ def ensure_dashboard_snapshot(user: User) -> None:
     never costs a ULFG API call."""
     if not user.ul_cookie:
         return
-    if Grade.query.filter_by(user_id=user.id).first():
+    if Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first():
         return
     if user.last_snapshot:
         return
@@ -2003,7 +2187,7 @@ def backfill_stored_grades() -> None:
     """One-time move of pre-existing last_snapshot JSON into the grades tables."""
     users = User.query.filter(User.last_snapshot.isnot(None)).all()
     for user in users:
-        if Grade.query.filter_by(user_id=user.id).first():
+        if Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first():
             continue
         try:
             payload = json.loads(user.last_snapshot)
@@ -2461,16 +2645,20 @@ def help_page():
 @login_required
 @student_only
 def dashboard():
-    if not current_user.ul_cookie:
+    if current_user.ul_cookie:
+        checked = current_user.semesters_checked_at
+        if not checked or (now_utc() - checked.replace(tzinfo=timezone.utc)).total_seconds() > 86400:
+            try:
+                ensure_ul_identity_from_cookie(current_user, force=True)
+            except Exception:
+                db.session.rollback()
+                flash("Could not refresh the semester list. Showing saved grades.", "warning")
+    cid = selected_semester(current_user)
+    if not cid:
         return redirect(url_for("update_cookie"))
-    if not current_user.ul_student_id or not current_user.ul_class_id:
-        try:
-            ensure_ul_identity_from_cookie(current_user, force=True)
-        except ULIdentityBootstrapError as exc:
-            flash(f"ULFG profile could not be loaded: {exc}", "error")
-            return redirect(url_for("update_cookie"))
-    ensure_dashboard_snapshot(current_user)
-    context = dashboard_context(current_user)
+    if current_user.ul_cookie and import_missing_semesters(current_user):
+        flash("Some semesters could not be imported. Use Refresh all semesters to retry. Saved grades were kept.", "warning")
+    context = dashboard_context(current_user, cid)
     consent_form = ConsentForm(hostage_consent=current_user.hostage_consent)
     return render_template("dashboard.html", **context, consent_form=consent_form)
 
@@ -2491,17 +2679,18 @@ def update_consent():
 @login_required
 @student_only
 def share_settings():
+    cid = selected_semester(current_user)
     if request.method == "POST":
         # The form only submits grade keys; each drags its rank partner along so
         # the two are always published together.
         requested = coupled_share_keys(set(request.form.getlist("public")))
-        set_public_keys(current_user, requested & allowed_share_keys(current_user))
+        set_public_keys(current_user, requested & allowed_share_keys(current_user, cid), cid)
         flash("Sharing preferences saved.", "success")
-        return redirect(url_for("share_settings"))
+        return redirect(url_for("share_settings", semester=cid))
 
     ensure_dashboard_snapshot(current_user)
-    snapshot = stored_snapshot(current_user) or {"courses": []}
-    keys = public_keys_for(current_user)
+    snapshot = stored_snapshot(current_user, cid) or {"courses": []}
+    keys = public_keys_for(current_user, cid)
 
     overall_values = overall_field_values(snapshot)
     overall_rows = [
@@ -2540,6 +2729,7 @@ def share_settings():
         overall_rows=overall_rows,
         course_rows=course_rows,
         public_count=len(keys),
+        **semester_context(current_user, cid),
     )
 
 
@@ -2551,8 +2741,9 @@ def leaderboard():
     # Classes that actually have students to rank.
     ranked_class_ids = {
         row[0]
-        for row in db.session.query(User.ul_class_id)
-        .filter(User.ul_class_id.isnot(None), User.is_admin.is_(False))
+        for row in db.session.query(StudentSemester.class_id)
+        .join(User, User.id == StudentSemester.user_id)
+        .filter(User.is_admin.is_(False))
         .distinct()
         .all()
         if row[0]
@@ -2563,7 +2754,7 @@ def leaderboard():
     for class_id in ranked_class_ids:
         record = db.session.get(SchoolClass, class_id)
         if record and any((record.year, record.half, record.major, record.branch_number)):
-            key = (record.year, record.half, record.major, record.branch_number)
+            key = (record.year, record.half, record.major, record.branch_number, record.academic_year or record.class_id)
         else:
             # Unresolved class: keep it on its own so it never merges with others.
             key = ("__solo__", class_id)
@@ -2695,20 +2886,22 @@ def public_directory():
 
     # Group students by base class identity, split by language within each group.
     merged: dict[Any, dict[str, Any]] = {}
-    for user in users:
-        profile = public_profile(user)
+    shared_enrollments = {(row.user_id, row.class_id) for row in PublicShare.query.all()}
+    users_by_id = {user.id: user for user in users}
+    for uid, cid in sorted(shared_enrollments):
+        user = users_by_id[uid]
+        profile = public_profile(user, cid)
         if not profile:
             continue
-        cid = user.ul_class_id
         record = db.session.get(SchoolClass, cid) if cid else None
         if record and any((record.year, record.half, record.major, record.branch_number)):
-            key = (record.year, record.half, record.major, record.branch_number)
+            key = (record.year, record.half, record.major, record.branch_number, record.academic_year or record.class_id)
             name = record.name
         else:
             key = ("__solo__", cid or "none")
             name = class_base_name(cid)
 
-        entry = {"user": user, "course_count": len(profile["courses"]), "overall_count": len(profile["overall"])}
+        entry = {"user": user, "class_id": cid, "course_count": len(profile["courses"]), "overall_count": len(profile["overall"])}
 
         if key not in merged:
             merged[key] = {"name": name, "english": [], "french": []}
@@ -2756,10 +2949,11 @@ def public_profile_page(username: str):
     user = User.query.filter_by(username=username).first()
     if not user or user.is_admin:
         abort(404)
-    profile = viewable_profile(user, current_user)
+    cid = selected_semester(user)
+    profile = viewable_profile(user, current_user, cid)
     if not profile:
         abort(404)
-    return render_template("public/profile.html", profile=profile)
+    return render_template("public/profile.html", profile=profile, **semester_context(user, cid))
 
 
 @app.route("/api/dashboard")
@@ -2772,12 +2966,13 @@ def dashboard_api():
         except ULIdentityBootstrapError:
             return jsonify({"error": "ULFG profile is missing."}), 409
     ensure_dashboard_snapshot(current_user)
-    context = dashboard_context(current_user)
+    cid = selected_semester(current_user)
+    context = dashboard_context(current_user, cid)
     return jsonify(
         {
             "student_name": current_user.ul_name or context["snapshot"].get("student_name"),
             "student_id": current_user.ul_student_id,
-            "class_id": current_user.ul_class_id,
+            "class_id": cid,
             "group": context["group"].name if context["group"] else None,
             "average": context["snapshot"].get("average"),
             "overall_rank": context["snapshot"].get("overall_rank"),
@@ -2937,12 +3132,12 @@ def admin_simulate_grade():
     users = User.query.filter(User.is_admin == False).all()
     affected = 0
     for user in users:
-        if not Grade.query.filter_by(user_id=user.id).first():
+        if not Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first():
             continue
 
-        grade = Grade.query.filter_by(user_id=user.id, material_id=SIM_MATERIAL_ID).first()
+        grade = Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id, material_id=SIM_MATERIAL_ID).first()
         if grade is None:
-            grade = Grade(user_id=user.id, material_id=SIM_MATERIAL_ID)
+            grade = Grade(user_id=user.id, class_id=user.ul_class_id, material_id=SIM_MATERIAL_ID)
             db.session.add(grade)
         grade.partial = 67.0
         grade.partial_rank = 76
@@ -3154,7 +3349,7 @@ def admin_view_dashboard(user_id: int):
         abort(404)
     if not user.hostage_consent:
         abort(403)
-    context = dashboard_context(user)
+    context = dashboard_context(user, selected_semester(user))
     return render_template("dashboard.html", **context, admin_viewing=True)
 
 
@@ -3184,6 +3379,7 @@ def request_refresh():
             {
                 "student_name": current_user.ul_name or context["snapshot"].get("student_name"),
                 "student_id": current_user.ul_student_id,
+                "class_id": current_user.ul_class_id,
                 "average": context["snapshot"].get("average"),
                 "overall_rank": context["snapshot"].get("overall_rank"),
                 "final_average": context["snapshot"].get("final_average"),
@@ -3250,13 +3446,15 @@ from crypto_utils import verify_or_seal as _verify_or_seal
 with app.app_context():
     db.create_all()
     ensure_user_name_column()
+    migrate_semester_data()
     bootstrap_materials()
     ensure_admin_account()
     _encrypt_legacy_data()
     _verify_or_seal(app, db)
     backfill_stored_grades()
     backfill_class_names()
-    start_background_services()
+    if os.environ.get("DISABLE_BACKGROUND_SERVICES") != "1":
+        start_background_services()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 {% extends 'base.html' %} {% set title = 'Dashboard - ULFG Grade Monitor' %} {%
 block content %}
-<div class="section-stack">
+{% include '_semesters.html' %}
+
+<div class="section-stack" id="semester-dashboard" data-semester="{{ selected_semester }}" data-historical="{{ 'true' if historical_semester or admin_viewing else 'false' }}">
   {% if admin_viewing %}
   <div class="alert alert-warning flex flex-wrap items-center justify-between gap-3">
     <span>
@@ -9,7 +11,7 @@ block content %}
     </span>
     <a class="btn btn-sm" href="{{ url_for('admin_users') }}">Back to admin</a>
   </div>
-  {% else %}
+  {% elif not historical_semester %}
   <div
     id="enter-overlay"
     class="fixed inset-0 z-40 grid place-items-center bg-bg px-6"
@@ -39,20 +41,25 @@ block content %}
         <p class="card-subtitle">
           Student ID ending in
           {{ user.ul_student_id[-4:] if user.ul_student_id else '----' }}
-          {% if group %} &middot; {{ group.name }}{% endif %}
+          &middot; {{ semester_name }}
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
+        {% if not historical_semester and not admin_viewing %}
         <span id="connection-status" class="badge conn-idle">
           Disconnected
         </span>
-        <a class="btn btn-sm" href="{{ url_for('share_settings') }}"
+        {% endif %}
+        {% if not admin_viewing %}
+        <a class="btn btn-sm" href="{{ url_for('share_settings', semester=selected_semester) }}"
           >Sharing settings</a
         >
+        {% endif %}
       </div>
     </div>
   </section>
 
+  {% if not historical_semester and not admin_viewing %}
   <section class="card">
     <div class="flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-3">
@@ -77,6 +84,7 @@ block content %}
     </div>
   </section>
 
+  {% endif %}
   <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
     {% for stat_id, label, value in [ ('stat-average', 'Partial average',
     snapshot.average), ('stat-overall-rank', 'Partial rank',

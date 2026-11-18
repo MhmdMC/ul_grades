@@ -34,7 +34,7 @@ block content %}
         {% for entry in school_class.english %}
         <a
           class="stat block transition hover:border-line-hard"
-          href="{{ url_for('public_profile_page', username=entry.user.username) }}"
+          href="{{ url_for('public_profile_page', username=entry.user.username, semester=entry.class_id) }}"
         >
           <p class="font-semibold">
             {{ entry.user.ul_name or entry.user.username }}
@@ -66,7 +66,7 @@ block content %}
         {% for entry in school_class.french %}
         <a
           class="stat block transition hover:border-line-hard"
-          href="{{ url_for('public_profile_page', username=entry.user.username) }}"
+          href="{{ url_for('public_profile_page', username=entry.user.username, semester=entry.class_id) }}"
         >
           <p class="font-semibold">
             {{ entry.user.ul_name or entry.user.username }}

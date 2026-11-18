@@ -1,5 +1,7 @@
 {% extends 'base.html' %} {% set title = profile.user.username + ' - Grades' %}
 {% block content %}
+{% include '_semesters.html' %}
+
 
 {#- A hidden field carries no value from the server. There is nothing in this
     markup to un-blur: the number simply is not here. -#}
