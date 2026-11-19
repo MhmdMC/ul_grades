@@ -368,8 +368,175 @@ def test_leaderboard_newest_year_first_and_admin_default(database):
     client = m.app.test_client()
     login(client, admin)
     page = client.get('/leaderboard').data.decode()
-    assert page.index('>2026</h3>') < page.index('>2025</h3>')
-    assert page.index('Z new class') < page.index('A old class')
+    assert page.index('value="2026"') < page.index('value="2025"')
+    assert 'Z new class' in page and 'A old class' not in page
     assert 'name="class_id" value="new"' in page
     old_page = client.get('/leaderboard?class_id=old').data.decode()
     assert 'name="class_id" value="old"' in old_page
+
+
+def setup_repeaters(database):
+    repeater, regular = database
+    for cid, year in [('old', '2025'), ('new', '2026')]:
+        record = m.db.session.get(m.SchoolClass, cid)
+        record.year = 1
+        record.half = 'fall'
+        record.academic_year = year
+    regular.ul_class_id = 'new'
+    regular.ul_student_id = '5678'
+    regular.ul_cookie = 'regular-cookie'
+    repeater.ul_cookie = 'repeat-cookie'
+    group = m.Group(name='Current group', class_id='new')
+    m.db.session.add(group)
+    m.db.session.commit()
+    for user in (repeater, regular):
+        user.group_id = group.id
+        m.persist_snapshot(user, two_courses(60, 80), 'new')
+        user.last_snapshot = json.dumps(two_courses(60, 80)['raw'])
+    m.persist_snapshot(repeater, two_courses(60, 80), 'old')
+    group.representative_user_id = repeater.id
+    group.last_json = json.dumps(two_courses(60, 80)['raw'], sort_keys=True)
+    m.db.session.commit()
+    return repeater, regular, group
+
+
+def two_courses(first, second):
+    return m.normalize_snapshot({'grades': [
+        {'materialId': 'one', 'partial': first}, {'materialId': 'two', 'partial': second}],
+        'average': {'partialAverage': 70}})
+
+
+def api_response(payload, status=200):
+    return SimpleNamespace(status_code=status, json_data=payload, endpoint='/test', response_time=0.01)
+
+
+def test_repeated_attempts_excluded_only_on_leaderboard(database):
+    user, viewer, _ = setup_repeaters(database)
+    assert m.is_repeated_semester(user, 'new')
+    assert not m.is_repeated_semester(user, 'old')
+    assert not m.is_repeated_semester(viewer, 'new')
+    with m.app.test_request_context():
+        assert len(m.build_leaderboard(['new'], 'course:one:partial', user)) == 1
+        assert len(m.build_leaderboard(['old'], 'course:one:partial', user)) == 1
+    assert m.dashboard_context(user)['courses'][0]['partial'] == 60
+    assert m.viewable_profile(user, user, 'new')['visible_count'] > 0
+    m.set_public_keys(user, {'course:one:partial'}, 'new')
+    assert m.viewable_profile(user, viewer, 'new')['courses'][0]['fields'][0]['value'] == 60
+
+
+def test_representative_preference_is_retroactive_and_resets_baseline(database):
+    repeater, regular, group = setup_repeaters(database)
+    assert m.choose_new_representative(group).id == regular.id
+    assert group.representative_user_id == regular.id and group.last_json is None
+    regular.ul_cookie = None
+    assert m.choose_new_representative(group).id == repeater.id
+    regular.ul_cookie = 'back'
+    assert m.choose_new_representative(group).id == regular.id
+
+
+def test_rep_update_unlocks_only_changed_course_and_retries_failure(database, monkeypatch):
+    repeater, regular, group = setup_repeaters(database)
+    m.choose_new_representative(group)
+    group.last_json = json.dumps(two_courses(60, 80)['raw'], sort_keys=True)
+    m.db.session.commit()
+    state = {'fail': True}
+    def request(user):
+        if user.id == repeater.id and state['fail']:
+            return api_response(None, 503)
+        return api_response(two_courses(61 if user.id == regular.id else 60, 80)['raw'])
+    monkeypatch.setattr(m, 'api_request', request)
+    m.poll_group(group)
+    one = m.Grade.query.filter_by(user_id=repeater.id, class_id='new', material_id='one').one()
+    assert one.leaderboard_confirmed_at is None
+    assert m.CourseRelease.query.count() == 1
+    state['fail'] = False
+    m.poll_group(group)  # Representative payload is unchanged; failed members still retry.
+    m.db.session.refresh(one)
+    assert one.leaderboard_confirmed_at is not None
+    two = m.Grade.query.filter_by(user_id=repeater.id, class_id='new', material_id='two').one()
+    assert two.leaderboard_confirmed_at is None
+    with m.app.test_request_context():
+        assert len(m.build_leaderboard(['new'], 'course:one:partial', regular)) == 2
+        assert len(m.build_leaderboard(['new'], 'course:two:partial', regular)) == 1
+        assert len(m.build_leaderboard(['new'], 'overall:partial_average', regular)) == 1
+    monkeypatch.setattr(m, 'api_request', lambda user: api_response(two_courses(61, 81)['raw']))
+    m.poll_group(group)
+    with m.app.test_request_context():
+        assert len(m.build_leaderboard(['new'], 'course:two:partial', regular)) == 2
+        assert len(m.build_leaderboard(['new'], 'overall:partial_average', regular)) == 2
+
+
+def test_representative_switch_and_rank_only_changes_do_not_release(database, monkeypatch):
+    _, regular, group = setup_repeaters(database)
+    raw = two_courses(70, 90)['raw']
+    monkeypatch.setattr(m, 'api_request', lambda user: api_response(raw))
+    m.poll_group(group)  # Switching from repeater to regular establishes a new baseline.
+    assert group.representative_user_id == regular.id
+    assert m.CourseRelease.query.count() == 0
+    raw = two_courses(70, 90)['raw']
+    raw['grades'][0]['partial'] = {'value': 70, 'rank': 3}
+    m.poll_group(group)
+    assert m.CourseRelease.query.count() == 0
+
+
+def test_leaderboard_personal_scope_empty_classes_and_year_filter(database):
+    user, other = database
+    other.ul_class_id = 'outside'
+    for cid, year in [('old', '2025'), ('new', '2026'), ('outside', '2026'), ('empty', '2026')]:
+        row = m.db.session.get(m.SchoolClass, cid)
+        if row is None:
+            row = m.SchoolClass(class_id=cid, name=f'Class {cid}')
+            m.db.session.add(row)
+        row.academic_year = year
+    m.persist_snapshot(user, snapshot(0), 'new')
+    m.persist_snapshot(user, snapshot(65), 'old')
+    m.persist_snapshot(other, snapshot(80), 'outside')
+    m.persist_snapshot(user, snapshot(None), 'empty')
+    client = m.app.test_client()
+    login(client, user)
+    page = client.get('/leaderboard').data.decode()
+    assert 'Class outside' not in page and 'Class empty' not in page
+    assert 'name="class_id" value="new"' in page
+    assert 'Semester old' not in page
+    all_page = client.get('/leaderboard?scope=all&year=2026').data.decode()
+    assert 'Class outside' in all_page and 'Class empty' not in all_page
+    old_page = client.get('/leaderboard?year=2025').data.decode()
+    assert 'Semester old' in old_page and 'Semester new' not in old_page
+
+
+def test_new_non_repeater_replaces_representative_on_join(database, monkeypatch):
+    repeater, regular, group = setup_repeaters(database)
+    regular.group_id = None
+    m.db.session.commit()
+    assert m.choose_new_representative(group).id == repeater.id
+    monkeypatch.setattr(m.ul_api, 'get_me', lambda *a: api_response({'username': '5678'}))
+    monkeypatch.setattr(m.ul_api, 'get_student_classes', lambda *a: api_response([
+        {'class': {'id': 'new', 'year': 2026, 'language': 'english',
+                   'definition': {'year': 1, 'half': 'fall'}}}]))
+    monkeypatch.setattr(m.ul_api, 'get_current_class', lambda *a: api_response({'classId': 'new'}))
+    m.ensure_ul_identity_from_cookie(regular, force=True)
+    assert group.representative_user_id == regular.id
+
+
+def test_third_attempt_is_a_repeat_and_ordinary_refresh_does_not_unlock(database):
+    user, _, _ = setup_repeaters(database)
+    m.db.session.add(m.SchoolClass(class_id='third', name='Third', academic_year='2027', year=1, half='fall'))
+    m.persist_snapshot(user, two_courses(75, 85), 'third')
+    assert m.is_repeated_semester(user, 'third')
+    assert not m.leaderboard_metric_allowed(user, 'third', 'course:one:partial')
+    m.persist_snapshot(user, two_courses(76, 85), 'third')
+    assert not m.leaderboard_metric_allowed(user, 'third', 'course:one:partial')
+
+
+def test_bad_rep_payload_cannot_create_a_false_release(database, monkeypatch):
+    _, _, group = setup_repeaters(database)
+    m.choose_new_representative(group)
+    original = json.dumps(two_courses(60, 80)['raw'], sort_keys=True)
+    group.last_json = original
+    m.db.session.commit()
+    monkeypatch.setattr(m, 'api_request', lambda user: api_response({'data': {'error': 'temporary'}}))
+    m.poll_group(group)
+    assert group.last_json == original
+    monkeypatch.setattr(m, 'api_request', lambda user: api_response(two_courses(60, 80)['raw']))
+    m.poll_group(group)
+    assert m.CourseRelease.query.count() == 0

@@ -147,6 +147,7 @@ Defined by `Grade`:
 | `final` | `FLOAT` | Nullable |
 | `final_grade` | `FLOAT` | Nullable |
 | `final_rank` | `INTEGER` | Nullable |
+| `leaderboard_confirmed_at` | `DATETIME` | Nullable; representative-triggered confirmation for this course |
 | `updated_at` | `DATETIME` | Not null; UTC default |
 
 Additional constraint:
@@ -156,6 +157,20 @@ UNIQUE (user_id, class_id, material_id)
 ```
 
 Constraint name: `uq_grades_user_material`.
+
+### `course_releases`
+
+Defined by `CourseRelease`. Stores the latest actual grade change detected on a
+representative per class and course, so failed member fetches can be retried.
+
+| Column | Type | Constraints / notes |
+|---|---|---|
+| `class_id` | `VARCHAR(64)` | Composite primary key |
+| `material_id` | `VARCHAR(64)` | Composite primary key |
+| `changed_at` | `DATETIME` | Not null |
+
+Startup adds `semester_grades.leaderboard_confirmed_at` to existing databases.
+Existing repeated-attempt grades start unconfirmed; the first attempt is unaffected.
 
 ### `semester_grade_averages`
 

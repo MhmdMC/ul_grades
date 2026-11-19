@@ -213,11 +213,19 @@ class Grade(db.Model):
     final = db.Column(db.Float, nullable=True)
     final_grade = db.Column(db.Float, nullable=True)
     final_rank = db.Column(db.Integer, nullable=True)
+    leaderboard_confirmed_at = db.Column(db.DateTime, nullable=True)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     user = relationship("User", back_populates="grades")
 
     __table_args__ = (db.UniqueConstraint("user_id", "class_id", "material_id", name="uq_grades_user_material"),)
+
+
+class CourseRelease(db.Model):
+    __tablename__ = "course_releases"
+    class_id = db.Column(db.String(64), primary_key=True)
+    material_id = db.Column(db.String(64), primary_key=True)
+    changed_at = db.Column(db.DateTime, nullable=False)
 
 
 class GradeAverage(db.Model):
@@ -473,6 +481,9 @@ def bootstrap_materials() -> None:
 
 
 def ensure_user_name_column() -> None:
+    grade_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(semester_grades)"))}
+    if "leaderboard_confirmed_at" not in grade_columns:
+        db.session.execute(text("ALTER TABLE semester_grades ADD COLUMN leaderboard_confirmed_at DATETIME"))
     columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(users)"))}
     if "semesters_checked_at" not in columns:
         db.session.execute(text("ALTER TABLE users ADD COLUMN semesters_checked_at DATETIME"))
@@ -709,7 +720,7 @@ def material_lookup(material_id: str) -> dict[str, Any]:
 
 def nested_value(value: Any) -> Any:
     if isinstance(value, dict):
-        if value.get("value") is not None:
+        if "value" in value:
             return value.get("value")
         if value.get("rank") is not None:
             return value.get("rank")
@@ -738,6 +749,14 @@ def extract_courses(payload: Any) -> list[dict[str, Any]]:
         elif isinstance(value, list):
             flattened.extend([item for item in value if isinstance(item, dict)])
     return flattened
+
+
+def valid_grade_payload(payload: Any) -> bool:
+    if isinstance(payload, list):
+        return all(isinstance(course, dict) for course in payload)
+    if isinstance(payload, dict):
+        return any(valid_grade_payload(payload[key]) for key in ("courses", "grades", "items", "data", "results") if key in payload)
+    return False
 
 
 def normalize_snapshot(payload: Any) -> dict[str, Any]:
@@ -917,7 +936,7 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     user.last_request_result = "cookie updated"
     if user.group:
         user.group.paused = False
-        user.group.representative_user_id = user.id
+        choose_new_representative(user.group)
     db.session.commit()
     log_event(
         "info",
@@ -1189,7 +1208,8 @@ def leaderboard_subjects(class_ids: list[str]) -> list[dict[str, Any]]:
     if not user_ids:
         return subjects
 
-    material_ids = {grade.material_id for grade in Grade.query.filter(Grade.user_id.in_(user_ids), Grade.class_id.in_(ids)).all()}
+    material_ids = {grade.material_id for grade in Grade.query.filter(Grade.user_id.in_(user_ids), Grade.class_id.in_(ids)).all()
+                    if grade_has_marks(grade) and leaderboard_course_allowed(db.session.get(User, grade.user_id), grade)}
     materials = sorted(
         ((material_id, material_lookup(material_id)) for material_id in material_ids),
         key=lambda item: str(item[1]["name"]).lower(),
@@ -1259,8 +1279,41 @@ def metric_rank_for_user(user: User, metric_key: str, class_id: str | None = Non
     return None
 
 
+def is_repeated_semester(user: User, class_id: str) -> bool:
+    current = db.session.get(SchoolClass, class_id)
+    if not current or current.year is None or not current.half or not academic_year_number(current.academic_year):
+        return False
+    previous = SchoolClass.query.join(StudentSemester, StudentSemester.class_id == SchoolClass.class_id).filter(
+        StudentSemester.user_id == user.id, SchoolClass.year == current.year,
+        SchoolClass.half == current.half, SchoolClass.major == current.major,
+    ).all()
+    return any(academic_year_number(row.academic_year) and
+               academic_year_number(row.academic_year) < academic_year_number(current.academic_year)
+               for row in previous)
+
+
+def grade_has_marks(grade: Grade) -> bool:
+    return any(value is not None for value in (grade.partial, grade.final, grade.final_grade))
+
+
+def leaderboard_course_allowed(user: User, grade: Grade) -> bool:
+    return not is_repeated_semester(user, grade.class_id) or grade.leaderboard_confirmed_at is not None
+
+
+def leaderboard_metric_allowed(user: User, class_id: str, metric_key: str) -> bool:
+    if not is_repeated_semester(user, class_id):
+        return True
+    if metric_key.startswith("course:"):
+        material_id = metric_key.split(":", 2)[1]
+        grade = Grade.query.filter_by(user_id=user.id, class_id=class_id, material_id=material_id).first()
+        return bool(grade and grade.leaderboard_confirmed_at)
+    # Do not expose carried-over course marks indirectly through an overall average.
+    grades = [grade for grade in Grade.query.filter_by(user_id=user.id, class_id=class_id).all() if grade_has_marks(grade)]
+    return bool(grades) and all(grade.leaderboard_confirmed_at is not None for grade in grades)
+
+
 def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> list[dict[str, Any]]:
-    """Grades are always visible; the *name* attached to them is not.
+    """Eligible grades are ranked; the attached name follows sharing permissions.
 
     A name is revealed only when the student published that exact grade. Admins
     additionally see the names of students who consented to the hostage clause.
@@ -1274,6 +1327,8 @@ def build_leaderboard(class_ids: list[str], metric_key: str, viewer: User) -> li
     for student in students:
         enrollment = StudentSemester.query.filter(StudentSemester.user_id == student.id, StudentSemester.class_id.in_(ids)).first()
         class_id = enrollment.class_id
+        if not leaderboard_metric_allowed(student, class_id, metric_key):
+            continue
         value = metric_value_for_user(student, metric_key, class_id)
         if value is None:
             continue
@@ -1564,7 +1619,7 @@ def sync_semester(user: User, class_id: str) -> bool:
     response = ul_api.get_grades(user.ul_student_id, class_id, user.ul_cookie)
     if response.status_code == 401 and refresh_cookie_from_credentials(user):
         response = ul_api.get_grades(user.ul_student_id, class_id, user.ul_cookie)
-    if not 200 <= response.status_code < 300 or not isinstance(response.json_data, (dict, list)):
+    if not 200 <= response.status_code < 300 or not valid_grade_payload(response.json_data):
         return False
     if isinstance(response.json_data, dict) and not any(
         key in response.json_data for key in ("courses", "grades", "items", "data", "results")
@@ -1832,14 +1887,20 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
         previous_group.representative_user_id = None
 
     db.session.commit()
+    choose_new_representative(group)
+    if previous_group and previous_group.id != group.id:
+        choose_new_representative(previous_group)
     return True
 
 
 def representative_for_group(group: Group) -> User | None:
     users = User.query.filter_by(group_id=group.id).order_by(User.last_successful_poll.is_(None), User.last_successful_poll.asc(), User.id.asc()).all()
-    valid_users = [user for user in users if user.ul_cookie]
+    valid_users = [user for user in users if user.ul_cookie and not user.is_admin and
+                   (not group.class_id or user.ul_class_id == group.class_id)]
     if not valid_users:
         return None
+    first_attempts = [user for user in valid_users if not is_repeated_semester(user, user.ul_class_id)]
+    valid_users = first_attempts or valid_users
     if group.representative_user_id:
         current = next((user for user in valid_users if user.id == group.representative_user_id), None)
         if current:
@@ -1849,6 +1910,9 @@ def representative_for_group(group: Group) -> User | None:
 
 def choose_new_representative(group: Group) -> User | None:
     rep = representative_for_group(group)
+    if group.representative_user_id != (rep.id if rep else None):
+        # Comparing different students' marks must never count as a new release.
+        group.last_json = None
     group.representative_user_id = rep.id if rep else None
     db.session.commit()
     return rep
@@ -1932,7 +1996,7 @@ def simulate_grade_cleanup() -> None:
         log_event("info", "simulate_grade_cleanup", "Cleaned up simulated grade data")
 
 
-def fetch_and_compare_user(user: User, is_first_group_poll: bool = False) -> dict[str, Any] | None:
+def fetch_and_compare_user(user: User, is_first_group_poll: bool = False, releases: list | None = None) -> dict[str, Any] | None:
     if not user.ul_cookie:
         return None
     started_at = now_utc()
@@ -2020,6 +2084,8 @@ def fetch_and_compare_user(user: User, is_first_group_poll: bool = False) -> dic
         return None
 
     payload = response.json_data if isinstance(response.json_data, dict) else {"data": response.json_data}
+    if not 200 <= response.status_code < 300 or not valid_grade_payload(response.json_data):
+        return None
     snapshot = normalize_snapshot(payload)
     old_snapshot = json.loads(user.last_snapshot) if user.last_snapshot else None
     changes = compare_snapshots(old_snapshot, snapshot)
@@ -2031,6 +2097,11 @@ def fetch_and_compare_user(user: User, is_first_group_poll: bool = False) -> dic
     user.last_request_result = "ok"
     db.session.commit()
     persist_snapshot(user, snapshot)
+    for release in releases or []:
+        grade = Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id, material_id=release.material_id).first()
+        if grade and grade_has_marks(grade):
+            grade.leaderboard_confirmed_at = release.changed_at
+    db.session.commit()
 
     log_event(
         "info",
@@ -2094,7 +2165,7 @@ def poll_group(group: Group) -> None:
         if group.paused:
             return
 
-        representative = representative_for_group(group) or choose_new_representative(group)
+        representative = choose_new_representative(group)
         if not representative:
             group.paused = True
             db.session.commit()
@@ -2191,14 +2262,29 @@ def poll_group(group: Group) -> None:
             )
             return
 
+        if not 200 <= response.status_code < 300 or not valid_grade_payload(response.json_data):
+            db.session.commit()
+            return
         payload = response.json_data if isinstance(response.json_data, dict) else {"data": response.json_data}
         snapshot = normalize_snapshot(payload)
         current_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         if group.last_json == current_payload:
+            retry_released_courses(group)
             db.session.commit()
             return
 
         is_first_poll = group.last_json is None
+        if not is_first_poll:
+            old_courses = {course["key"]: course for course in normalize_snapshot(json.loads(group.last_json))["courses"]}
+            for course in snapshot["courses"]:
+                old = old_courses.get(course["key"], {})
+                if any(course.get(field) is not None and old.get(field) != course.get(field)
+                       for field in ("partial", "final", "finalGrade")):
+                    release = db.session.get(CourseRelease, (group.class_id, course["key"]))
+                    if release is None:
+                        release = CourseRelease(class_id=group.class_id, material_id=course["key"])
+                        db.session.add(release)
+                    release.changed_at = now_utc()
         group.last_json = current_payload
         group.last_detected_change = now_utc()
         db.session.commit()
@@ -2206,10 +2292,33 @@ def poll_group(group: Group) -> None:
             emit_status(group, f"Change detected for {group.name}. Verifying members.", "info")
 
         for user in User.query.filter_by(group_id=group.id).all():
-            fetch_and_compare_user(user, is_first_group_poll=is_first_poll)
+            releases = CourseRelease.query.filter_by(class_id=user.ul_class_id).all()
+            fetch_and_compare_user(user, is_first_group_poll=is_first_poll, releases=releases)
 
     finally:
         POLL_LOCK = False
+
+
+def retry_released_courses(group: Group) -> None:
+    releases = CourseRelease.query.filter_by(class_id=group.class_id).all()
+    if not releases:
+        return
+    for user in User.query.filter_by(group_id=group.id).all():
+        if not is_repeated_semester(user, user.ul_class_id):
+            continue
+        grades = {grade.material_id: grade for grade in Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).all()}
+        enrollment = db.session.get(StudentSemester, (user.id, user.ul_class_id))
+        pending = []
+        for release in releases:
+            grade = grades.get(release.material_id)
+            if grade is None:
+                # A successful fetch may show the student does not take this course.
+                if not enrollment or not enrollment.synced_at or enrollment.synced_at < release.changed_at:
+                    pending.append(release)
+            elif grade.leaderboard_confirmed_at is None or grade.leaderboard_confirmed_at < release.changed_at:
+                pending.append(release)
+        if pending:
+            fetch_and_compare_user(user, releases=pending)
 
 
 def _polling_blocked() -> bool:
@@ -2875,32 +2984,40 @@ def share_settings():
 @login_required
 def leaderboard():
     search = request.args.get("q", "").strip()
+    show_all = current_user.is_admin or request.args.get("scope") == "all"
+    own_class_ids = {row.class_id for row in StudentSemester.query.filter_by(user_id=current_user.id).all()}
 
-    # Classes that actually have students to rank.
-    ranked_class_ids = {
-        row[0]
-        for row in db.session.query(StudentSemester.class_id)
-        .join(User, User.id == StudentSemester.user_id)
-        .filter(User.is_admin.is_(False))
-        .distinct()
-        .all()
-        if row[0]
-    }
+    # A course with a real zero is a grade; empty rows and unconfirmed repeats are not.
+    ranked_class_ids = set()
+    repeated = {}
+    for grade, user in db.session.query(Grade, User).join(User, Grade.user_id == User.id).filter(User.is_admin.is_(False)).all():
+        if not grade_has_marks(grade):
+            continue
+        key = (user.id, grade.class_id)
+        if key not in repeated:
+            repeated[key] = is_repeated_semester(user, grade.class_id)
+        if not repeated[key] or grade.leaderboard_confirmed_at is not None:
+            ranked_class_ids.add(grade.class_id)
+
+    def class_key(class_id):
+        record = db.session.get(SchoolClass, class_id)
+        if record and any((record.year, record.half, record.major, record.branch_number)):
+            return (record.year, record.half, record.major, record.branch_number, record.academic_year or record.class_id)
+        return ("__solo__", class_id)
+
+    own_keys = {class_key(cid) for cid in own_class_ids}
     # Group real class ids by their (year, half, major, branch) identity so the
     # English and French sections of the same class sit together.
     groups: dict[Any, list[str]] = {}
     for class_id in ranked_class_ids:
-        record = db.session.get(SchoolClass, class_id)
-        if record and any((record.year, record.half, record.major, record.branch_number)):
-            key = (record.year, record.half, record.major, record.branch_number, record.academic_year or record.class_id)
-        else:
-            # Unresolved class: keep it on its own so it never merges with others.
-            key = ("__solo__", class_id)
+        key = class_key(class_id)
         groups.setdefault(key, []).append(class_id)
 
     # Build one merged class button per academic identity (no language split).
     classes: list[dict[str, Any]] = []
-    for cids in groups.values():
+    for key, cids in groups.items():
+        if not show_all and key not in own_keys:
+            continue
         sorted_cids = sorted(cids)
         rep_id = sorted_cids[0]
         record = db.session.get(SchoolClass, rep_id)
@@ -2914,6 +3031,18 @@ def leaderboard():
         needle = search.lower()
         classes = [item for item in classes if needle in item["name"].lower() or needle in str(item["class_id"])]
     classes.sort(key=lambda item: (-academic_year_number(item["academic_year"]), item["academic_year"] or "", item["name"].lower()))
+    years = list(dict.fromkeys(item["academic_year"] or "unknown" for item in classes))
+    requested_class = request.args.get("class_id", "")
+    current_record = db.session.get(SchoolClass, current_user.ul_class_id) if current_user.ul_class_id else None
+    preferred_year = current_record.academic_year if current_record else None
+    if requested_class and not request.args.get("year"):
+        requested_record = db.session.get(SchoolClass, requested_class)
+        if requested_record:
+            preferred_year = requested_record.academic_year
+    selected_year = request.args.get("year") or preferred_year
+    if selected_year not in years:
+        selected_year = years[0] if years else ""
+    classes = [item for item in classes if (item["academic_year"] or "unknown") == selected_year]
 
     # Reverse map: any class_id → its group's sorted ids
     class_id_to_group: dict[str, list[str]] = {}
@@ -2945,6 +3074,9 @@ def leaderboard():
         cids = class_id_to_group.get(selected_class_id)
         if cids is not None:
             selected_class_id = cids[0]
+    visible_ids = {item["class_id"] for item in classes}
+    if selected_class_id not in visible_ids:
+        selected_class_id = classes[0]["class_id"] if classes else ""
 
     selected_class_ids: list[str] = []
     if selected_class_id:
@@ -3004,6 +3136,9 @@ def leaderboard():
         "leaderboard.html",
         search=search,
         classes=classes,
+        years=years,
+        selected_year=selected_year,
+        show_all=show_all,
         selected_class_id=selected_class_id,
         selected_class_name=selected_class_name,
         selected_lang=selected_lang,
@@ -3595,6 +3730,8 @@ with app.app_context():
     _verify_or_seal(app, db)
     backfill_stored_grades()
     backfill_class_names()
+    for existing_group in Group.query.all():
+        choose_new_representative(existing_group)
     if os.environ.get("DISABLE_BACKGROUND_SERVICES") != "1":
         start_background_services()
 

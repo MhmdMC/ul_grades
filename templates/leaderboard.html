@@ -13,6 +13,8 @@ block content %}
         </p>
       </div>
       <form method="get" class="flex flex-wrap items-center gap-2">
+        <input type="hidden" name="scope" value="{{ 'all' if show_all else 'mine' }}" />
+        <input type="hidden" name="year" value="{{ selected_year }}" />
         <input
           name="q"
           value="{{ search }}"
@@ -24,29 +26,42 @@ block content %}
     </div>
   </section>
 
+  <section class="card flex flex-wrap items-end justify-between gap-4">
+    {% if years %}
+    <form method="get">
+      <input type="hidden" name="scope" value="{{ 'all' if show_all else 'mine' }}" />
+      <input type="hidden" name="q" value="{{ search }}" />
+      <label class="field-label" for="leaderboard-year">Year</label>
+      <select class="select" name="year" id="leaderboard-year" onchange="this.form.requestSubmit()">
+        {% for year in years %}<option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year if year != 'unknown' else 'Other classes' }}</option>{% endfor %}
+      </select>
+      <noscript><button class="btn" type="submit">Show</button></noscript>
+    </form>
+    {% endif %}
+    {% if not is_admin %}
+    <a class="btn" href="{{ url_for('leaderboard', scope='mine' if show_all else 'all', year=selected_year) }}">{{ 'My semesters' if show_all else 'Show all classes' }}</a>
+    {% endif %}
+  </section>
+
   {% if classes %}
   <section class="card">
     <h2 class="card-title">Class</h2>
+    <div class="mt-3 flex flex-wrap gap-2">
     {% for item in classes %}
-      {% if loop.changed(item.academic_year) %}
-      {% if not loop.first %}</div>{% endif %}
-      <h3 class="meta mt-5">{{ item.academic_year or 'Other classes' }}</h3>
-      <div class="mt-3 flex flex-wrap gap-2">
-      {% endif %}
       <a
         class="btn {{ 'btn-primary' if item.class_id == selected_class_id else '' }}"
-        href="{{ url_for('leaderboard', class_id=item.class_id, q=search) }}"
+        href="{{ url_for('leaderboard', class_id=item.class_id, q=search, year=selected_year, scope='all' if show_all else 'mine') }}"
       >
         {{ item.name }}
       </a>
-      {% if loop.last %}</div>{% endif %}
     {% endfor %}
+    </div>
 
   </section>
   {% else %}
   <div class="empty-state">
     {% if search %} No class matches &ldquo;{{ search }}&rdquo;. {% else %} No
-    classes have any students to rank yet. {% endif %}
+    grades to rank yet. {% endif %}
   </div>
   {% endif %} {% if selected_class_id %}
   <section class="card">
@@ -54,6 +69,8 @@ block content %}
     <form method="get" class="mt-4 flex flex-wrap items-end gap-3">
       <input type="hidden" name="class_id" value="{{ selected_class_id }}" />
       <input type="hidden" name="q" value="{{ search }}" />
+      <input type="hidden" name="year" value="{{ selected_year }}" />
+      <input type="hidden" name="scope" value="{{ 'all' if show_all else 'mine' }}" />
 
       <div class="w-full sm:w-72">
         <label class="field-label" for="subject">Subject</label>

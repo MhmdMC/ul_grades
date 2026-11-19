@@ -33,6 +33,19 @@ saved ULFG cookies and credentials are encrypted with it.
 - Classes from different academic years are kept separate. English/French sections
   are grouped when the API supplies matching academic-year metadata; unknown
   academic years remain separate to avoid combining unrelated cohorts.
+- Leaderboards default to the student's enrolled semesters, with **Show all
+  classes** for other classes. The year dropdown shows one year at a time, newest
+  first. Admins see all classes. Classes without eligible course grades are hidden.
+- A later enrollment in the same study year, half, and major counts as a repeated
+  semester when an earlier academic year exists in the student's saved history.
+  Representatives prefer connected non-repeaters. Existing groups are reconciled
+  on startup, enrollment discovery, and polling; a new non-repeater takes priority.
+- Repeated-attempt course grades are excluded only from leaderboards until that
+  course changes in the representative's payload and the student's fetch succeeds.
+  Initial snapshots, rank-only changes, representative switches, and manual imports
+  do not unlock courses. Failed member fetches retry on later polls. Overall
+  averages stay excluded until every course with marks is confirmed. Dashboards,
+  profiles, and sharing retain their existing visibility rules.
 
 ## Upgrade and data
 
