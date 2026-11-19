@@ -919,6 +919,7 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     user.ul_cookie = candidate_cookie.strip()
     try:
         ensure_ul_identity_from_cookie(user, force=True)
+        requested_class_id = user.ul_class_id
         response = api_request(user)
         if response.status_code == 401:
             raise ULIdentityBootstrapError("That ULFG cookie is invalid or expired.")
@@ -932,6 +933,10 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
         raise
 
     payload = response.json_data if isinstance(response.json_data, dict) else {"data": response.json_data}
+    db.session.refresh(user)
+    if user.ul_class_id != requested_class_id:
+        raise ULIdentityBootstrapError("Semester changed while connecting. Please retry.")
+    payload["_requested_class_id"] = requested_class_id
     user.updated_at = now_utc()
     user.last_request_result = "cookie updated"
     if user.group:
@@ -952,7 +957,7 @@ def activate_ul_cookie(user: User, candidate_cookie: str) -> ULAPIResponse:
     user.last_snapshot = json.dumps(payload, ensure_ascii=False)
     user.last_successful_poll = now_utc()
     db.session.commit()
-    persist_snapshot(user, normalize_snapshot(payload))
+    persist_snapshot(user, normalize_snapshot(payload), requested_class_id)
     return response
 
 
@@ -1067,6 +1072,8 @@ def coerce_int(value: Any) -> int | None:
 def persist_snapshot(user: User, normalized: dict[str, Any], class_id: str | None = None) -> None:
     """Write a freshly fetched snapshot into the grades tables."""
     class_id = class_id or user.ul_class_id
+    if normalized.get("class_id") is not None and str(normalized["class_id"]) != str(class_id):
+        raise ULIdentityBootstrapError("ULFG returned grades for a different semester. Saved grades were kept.")
     existing = {grade.material_id: grade for grade in Grade.query.filter_by(user_id=user.id, class_id=class_id).all()}
     seen: set[str] = set()
 
@@ -1593,6 +1600,17 @@ def delete_legacy_semester_rows(_mapper, connection, user) -> None:
             connection.execute(text(f"DELETE FROM {table} WHERE user_id=:uid"), {"uid": user.id})
 
 
+def matching_cached_snapshot(user: User) -> dict | None:
+    try:
+        payload = json.loads(user.last_snapshot) if user.last_snapshot else None
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    source = payload.get("_requested_class_id") or payload.get("class_id") or payload.get("classId")
+    return payload if source is not None and str(source) == str(user.ul_class_id) else None
+
+
 def selected_semester(user: User) -> str | None:
     cid = request.args.get("semester") or user.ul_class_id
     if cid != user.ul_class_id and db.session.get(StudentSemester, (user.id, cid)) is None:
@@ -1855,8 +1873,9 @@ def ensure_ul_identity_from_cookie(user: User, *, force: bool = False) -> bool:
         pass
     class_payload = _class_payload_from_classes_list(classes_response.json_data, latest_class_id)
 
-    if user.ul_class_id and user.last_snapshot and stored_snapshot(user) is None:
-        persist_snapshot(user, normalize_snapshot(json.loads(user.last_snapshot)))
+    cached = matching_cached_snapshot(user)
+    if user.ul_class_id and cached and stored_snapshot(user) is None:
+        persist_snapshot(user, normalize_snapshot(cached))
     previous_group = user.group
     # Set the student id first: resolving the class name is a per-student UL call.
     user.ul_student_id = student_username
@@ -1999,6 +2018,8 @@ def simulate_grade_cleanup() -> None:
 def fetch_and_compare_user(user: User, is_first_group_poll: bool = False, releases: list | None = None) -> dict[str, Any] | None:
     if not user.ul_cookie:
         return None
+    requested_class_id = user.ul_class_id
+    requested_student_id = user.ul_student_id
     started_at = now_utc()
     try:
         response = api_request(user)
@@ -2016,6 +2037,9 @@ def fetch_and_compare_user(user: User, is_first_group_poll: bool = False, releas
         )
         return None
 
+    db.session.refresh(user)
+    if (user.ul_class_id, user.ul_student_id) != (requested_class_id, requested_student_id):
+        return None
     if response.status_code == 401 and refresh_cookie_from_credentials(user):
         try:
             response = api_request(user)
@@ -2092,11 +2116,20 @@ def fetch_and_compare_user(user: User, is_first_group_poll: bool = False, releas
 
     has_existing_grades = Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first() is not None
 
-    user.last_snapshot = json.dumps(payload, ensure_ascii=False)
-    user.last_successful_poll = now_utc()
-    user.last_request_result = "ok"
+    payload["_requested_class_id"] = requested_class_id
+    updated = User.query.filter_by(id=user.id, ul_class_id=requested_class_id,
+                                   ul_student_id=requested_student_id).update({
+        "last_snapshot": json.dumps(payload, ensure_ascii=False),
+        "last_successful_poll": now_utc(), "last_request_result": "ok",
+    }, synchronize_session=False)
+    if not updated:
+        db.session.rollback()
+        return None
     db.session.commit()
-    persist_snapshot(user, snapshot)
+    persist_snapshot(user, snapshot, requested_class_id)
+    db.session.refresh(user)
+    if (user.ul_class_id, user.ul_student_id) != (requested_class_id, requested_student_id):
+        return None
     for release in releases or []:
         grade = Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id, material_id=release.material_id).first()
         if grade and grade_has_marks(grade):
@@ -2262,6 +2295,10 @@ def poll_group(group: Group) -> None:
             )
             return
 
+        db.session.refresh(representative)
+        db.session.refresh(group)
+        if representative.ul_class_id != group.class_id or group.representative_user_id != representative.id:
+            return
         if not 200 <= response.status_code < 300 or not valid_grade_payload(response.json_data):
             db.session.commit()
             return
@@ -2357,7 +2394,7 @@ def dashboard_context(user: User, class_id: str | None = None) -> dict[str, Any]
     # whose grades were fetched before the grades tables existed.
     normalized = stored_snapshot(user, class_id)
     if normalized is None:
-        raw = json.loads(user.last_snapshot) if user.last_snapshot and class_id == user.ul_class_id else {"grades": []}
+        raw = (matching_cached_snapshot(user) if class_id == user.ul_class_id else None) or {"grades": []}
         normalized = normalize_snapshot(raw)
 
     courses = []
@@ -2389,8 +2426,6 @@ def ensure_dashboard_snapshot(user: User) -> None:
     if not user.ul_cookie:
         return
     if Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first():
-        return
-    if user.last_snapshot:
         return
     if not user.ul_student_id or not user.ul_class_id:
         try:
@@ -2436,9 +2471,8 @@ def backfill_stored_grades() -> None:
     for user in users:
         if Grade.query.filter_by(user_id=user.id, class_id=user.ul_class_id).first():
             continue
-        try:
-            payload = json.loads(user.last_snapshot)
-        except (TypeError, ValueError):
+        payload = matching_cached_snapshot(user)
+        if payload is None:
             continue
         persist_snapshot(user, normalize_snapshot(payload))
 
@@ -3480,7 +3514,12 @@ def admin_users():
                     db.session.add(group)
                     db.session.commit()
                 user.group_id = group.id
-                user.ul_class_id = request.form.get("class_id") or request.form.get("ul_class_id") or user.ul_class_id
+                new_class_id = request.form.get("class_id") or request.form.get("ul_class_id") or user.ul_class_id
+                if new_class_id != user.ul_class_id:
+                    user.last_snapshot = None
+                    user.last_successful_poll = None
+                    user.semesters_checked_at = None
+                user.ul_class_id = new_class_id
                 db.session.commit()
                 flash("User moved to another group.", "success")
 

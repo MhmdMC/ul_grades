@@ -138,7 +138,7 @@ def test_identity_discovers_all_classes_and_uses_current_endpoint(database, monk
     user, _ = database
     user.ul_cookie = 'test-cookie'
     user.ul_class_id = 'old'
-    user.last_snapshot = json.dumps(snapshot(65)['raw'])
+    user.last_snapshot = json.dumps({**snapshot(65)['raw'], '_requested_class_id': 'old'})
     response = lambda data: SimpleNamespace(status_code=200, json_data=data)
     monkeypatch.setattr(m.ul_api, 'get_me', lambda *a: response({'username': '1234', 'name': 'Student'}))
     # Deliberately unordered: current endpoint must win over list position.
@@ -540,3 +540,37 @@ def test_bad_rep_payload_cannot_create_a_false_release(database, monkeypatch):
     monkeypatch.setattr(m, 'api_request', lambda user: api_response(two_courses(60, 80)['raw']))
     m.poll_group(group)
     assert m.CourseRelease.query.count() == 0
+
+
+def test_poll_response_does_not_follow_user_into_a_new_semester(database, monkeypatch):
+    user, _ = database
+    user.ul_cookie = 'cookie'
+    user.ul_class_id = 'old'
+    m.persist_snapshot(user, snapshot(65), 'old')
+    def delayed_response(student):
+        # Enrollment discovery finishes while the old-class HTTP request is in flight.
+        student.ul_class_id = 'new'
+        student.last_snapshot = None
+        m.db.session.commit()
+        return api_response(snapshot(66)['raw'])
+    monkeypatch.setattr(m, 'api_request', delayed_response)
+    m.fetch_and_compare_user(user)
+    assert m.stored_snapshot(user, 'new') is None
+    assert user.last_snapshot is None
+
+
+def test_unlabelled_cached_grades_are_not_backfilled_under_current_class(database):
+    user, _ = database
+    user.last_snapshot = json.dumps(snapshot(65)['raw'])
+    m.db.session.commit()
+    m.backfill_stored_grades()
+    assert m.stored_snapshot(user) is None
+    assert m.dashboard_context(user)['courses'] == []
+
+
+def test_response_with_wrong_class_id_is_rejected(database):
+    user, _ = database
+    raw = {**snapshot(65)['raw'], 'classId': 'old'}
+    with pytest.raises(m.ULIdentityBootstrapError):
+        m.persist_snapshot(user, m.normalize_snapshot(raw), 'new')
+    assert m.stored_snapshot(user) is None
