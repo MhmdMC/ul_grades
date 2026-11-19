@@ -574,3 +574,51 @@ def test_response_with_wrong_class_id_is_rejected(database):
     with pytest.raises(m.ULIdentityBootstrapError):
         m.persist_snapshot(user, m.normalize_snapshot(raw), 'new')
     assert m.stored_snapshot(user) is None
+
+
+def test_admin_current_refresh_replaces_corrupt_copy_and_preserves_history(database, monkeypatch):
+    user, admin = database
+    admin.is_admin = True
+    user.ul_cookie = 'cookie'
+    for cid in ('old', 'new'):
+        m.persist_snapshot(user, snapshot(65), cid)
+        m.set_public_keys(user, {'overall:partial_average'}, cid)
+    monkeypatch.setattr(m, 'ensure_ul_identity_from_cookie', lambda *a, **kw: True)
+    calls = []
+    def fetch(uid, cid, cookie):
+        calls.append(cid)
+        return api_response({'grades': [{'materialId': 'new-course', 'partial': None}]})
+    monkeypatch.setattr(m.ul_api, 'get_grades', fetch)
+    monkeypatch.setattr(m.socketio, 'start_background_task', lambda fn, *args: fn(*args))
+    client = m.app.test_client()
+    login(client, admin)
+    assert client.post('/admin/semesters/sync', data={'scope': 'current'}).status_code == 302
+    m.db.session.expire_all()
+    assert calls == ['new']
+    assert m.stored_snapshot(user)['courses'][0]['key'] == 'new-course'
+    assert m.stored_snapshot(user)['average'] is None
+    assert m.stored_snapshot(user, 'old')['average'] == 65
+    assert m.public_keys_for(user) == {'overall:partial_average'}
+    assert m.public_keys_for(user, 'old') == {'overall:partial_average'}
+    assert m.matching_cached_snapshot(user)['_requested_class_id'] == 'new'
+    job = m.SemesterSyncJob.query.one()
+    assert job.scope == 'current' and job.completed == 1 and job.failed == 0
+    assert b'Refresh all current semesters' in client.get('/admin/semesters').data
+
+
+def test_current_refresh_failure_preserves_saved_data_and_is_admin_only(database, monkeypatch):
+    user, admin = database
+    admin.is_admin = True
+    user.ul_cookie = 'cookie'
+    m.persist_snapshot(user, snapshot(65), 'new')
+    monkeypatch.setattr(m, 'ensure_ul_identity_from_cookie', lambda *a, **kw: True)
+    monkeypatch.setattr(m.ul_api, 'get_grades', lambda *a: api_response(None, 503))
+    monkeypatch.setattr(m.socketio, 'start_background_task', lambda fn, *args: fn(*args))
+    client = m.app.test_client()
+    login(client, user)
+    assert client.post('/admin/semesters/sync', data={'scope': 'current'}).status_code == 403
+    login(client, admin)
+    client.post('/admin/semesters/sync', data={'scope': 'current'})
+    m.db.session.expire_all()
+    assert m.stored_snapshot(user)['average'] == 65
+    assert m.SemesterSyncJob.query.one().failed == 1

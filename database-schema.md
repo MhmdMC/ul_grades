@@ -122,6 +122,7 @@ Defined by `SemesterSyncJob`; records admin-requested background history imports
 | `status` | `VARCHAR(32)` | Not null; queued, running, completed, completed_with_errors, failed, or interrupted |
 | `user_id` | `INTEGER` | Nullable; selected student, or all students when null |
 | `class_id` | `VARCHAR(64)` | Nullable; selected semester, or all historical enrollments when null |
+| `scope` | `VARCHAR(16)` | Not null; `history` (default) or `current`; added automatically on upgrade |
 | `completed` | `INTEGER` | Not null; default 0 |
 | `failed` | `INTEGER` | Not null; default 0 |
 | `details` | `TEXT` | Not null; JSON array of safe errors, without grades or credentials |

@@ -20,6 +20,11 @@ saved ULFG cookies and credentials are encrypted with it.
   rediscover enrollments. Imports run in the background with persistent progress
   and safe error messages. Only one history job runs at a time; a job interrupted
   by a server restart can be retried after ten minutes without progress.
+- **Refresh all current semesters** rediscovers each student's current class and
+  replaces only that semester's grades with a fresh ULFG response. It can repair
+  wrong-semester copies without deleting history or changing sharing choices.
+  Failures keep saved data and appear in the job results for retry. This button
+  does not unlock repeated courses on the leaderboard.
 - Dashboard, sharing settings, and student profiles have a semester selector.
   Rankings include historical classes; directory entries link to the exact shared
   semester. Search opens a student's current profile, where history is selectable.

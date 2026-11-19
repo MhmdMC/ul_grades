@@ -192,6 +192,7 @@ class SemesterSyncJob(db.Model):
     status = db.Column(db.String(32), nullable=False, default="queued")
     user_id = db.Column(db.Integer, nullable=True)
     class_id = db.Column(db.String(64), nullable=True)
+    scope = db.Column(db.String(16), nullable=False, default="history")
     completed = db.Column(db.Integer, nullable=False, default=0)
     failed = db.Column(db.Integer, nullable=False, default=0)
     details = db.Column(db.Text, nullable=False, default="[]")
@@ -481,6 +482,9 @@ def bootstrap_materials() -> None:
 
 
 def ensure_user_name_column() -> None:
+    job_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(semester_sync_jobs)"))}
+    if "scope" not in job_columns:
+        db.session.execute(text("ALTER TABLE semester_sync_jobs ADD COLUMN scope VARCHAR(16) NOT NULL DEFAULT 'history'"))
     grade_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(semester_grades)"))}
     if "leaderboard_confirmed_at" not in grade_columns:
         db.session.execute(text("ALTER TABLE semester_grades ADD COLUMN leaderboard_confirmed_at DATETIME"))
@@ -1644,10 +1648,13 @@ def sync_semester(user: User, class_id: str) -> bool:
     ):
         return False
     persist_snapshot(user, normalize_snapshot(response.json_data), class_id)
-    if class_id == user.ul_class_id:
-        user.last_snapshot = json.dumps(response.json_data, ensure_ascii=False)
-        user.last_successful_poll = now_utc()
-        db.session.commit()
+    payload = response.json_data if isinstance(response.json_data, dict) else {"data": response.json_data}
+    payload = {**payload, "_requested_class_id": class_id}
+    User.query.filter_by(id=user.id, ul_class_id=class_id).update({
+        "last_snapshot": json.dumps(payload, ensure_ascii=False),
+        "last_successful_poll": now_utc(),
+    }, synchronize_session=False)
+    db.session.commit()
     return True
 
 
@@ -1710,13 +1717,16 @@ def run_semester_sync_job(job_id: int) -> None:
                         raise ULIdentityBootstrapError("No ULFG cookie saved. The student must reconnect their account.")
                     if selected_class is None:
                         ensure_ul_identity_from_cookie(user, force=True)
-                    enrollments = StudentSemester.query.filter(
-                        StudentSemester.user_id == uid,
-                        StudentSemester.class_id != user.ul_class_id,
-                    )
+                    enrollments = StudentSemester.query.filter(StudentSemester.user_id == uid)
+                    if job.scope == "current":
+                        enrollments = enrollments.filter(StudentSemester.class_id == user.ul_class_id)
+                    else:
+                        enrollments = enrollments.filter(StudentSemester.class_id != user.ul_class_id)
                     if selected_class is not None:
                         enrollments = enrollments.filter_by(class_id=selected_class)
                     class_ids = [row.class_id for row in enrollments.all()]
+                    if job.scope == "current" and not class_ids:
+                        raise ULIdentityBootstrapError("Current semester could not be resolved. Saved grades were kept.")
                 except Exception as exc:
                     db.session.rollback()
                     report(uid, None, semester_sync_error(exc))
@@ -1772,6 +1782,9 @@ def admin_sync_semesters():
         abort(403)
     uid = request.form.get("user_id")
     cid = request.form.get("class_id") or None
+    scope = request.form.get("scope", "history")
+    if scope not in ("history", "current") or (scope == "current" and cid):
+        abort(400)
     user = None
     if uid:
         user = db.session.get(User, coerce_int(uid))
@@ -1784,13 +1797,13 @@ def admin_sync_semesters():
         SemesterSyncJob.active_key == "history",
         SemesterSyncJob.updated_at < now_utc() - timedelta(minutes=10),
     ).update({"active_key": None, "status": "interrupted"})
-    job = SemesterSyncJob(active_key="history", user_id=user.id if user else None, class_id=cid)
+    job = SemesterSyncJob(active_key="history", user_id=user.id if user else None, class_id=cid, scope=scope)
     db.session.add(job)
     try:
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        flash("A history refresh is already running. Please wait for it to finish.", "warning")
+        flash("A semester refresh is already running. Please wait for it to finish.", "warning")
         return redirect(url_for("admin_semesters"))
     try:
         socketio.start_background_task(run_semester_sync_job, job.id)
