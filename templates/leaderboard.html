@@ -26,7 +26,7 @@ block content %}
     </div>
   </section>
 
-  <section class="card flex flex-wrap items-end justify-between gap-4">
+  <section class="card flex flex-wrap items-end gap-4">
     {% if years %}
     <form method="get">
       <input type="hidden" name="scope" value="{{ 'all' if show_all else 'mine' }}" />
@@ -38,15 +38,10 @@ block content %}
       <noscript><button class="btn" type="submit">Show</button></noscript>
     </form>
     {% endif %}
-    {% if not is_admin %}
-    <a class="btn" href="{{ url_for('leaderboard', scope='mine' if show_all else 'all', year=selected_year) }}">{{ 'My semesters' if show_all else 'Show all classes' }}</a>
-    {% endif %}
-  </section>
-
-  {% if classes %}
-  <section class="card">
-    <h2 class="card-title">Class</h2>
-    <div class="mt-3 flex flex-wrap gap-2">
+    {% if classes %}
+    <div class="min-w-0 flex-1">
+      <h2 class="field-label">Class</h2>
+      <div class="flex flex-wrap gap-2">
     {% for item in classes %}
       <a
         class="btn {{ 'btn-primary' if item.class_id == selected_class_id else '' }}"
@@ -55,10 +50,14 @@ block content %}
         {{ item.name }}
       </a>
     {% endfor %}
+      </div>
     </div>
-
+    {% endif %}
+    {% if not is_admin %}
+    <a class="btn ml-auto" href="{{ url_for('leaderboard', scope='mine' if show_all else 'all', year=selected_year) }}">{{ 'My semesters' if show_all else 'Show all classes' }}</a>
+    {% endif %}
   </section>
-  {% else %}
+  {% if not classes %}
   <div class="empty-state">
     {% if search %} No class matches &ldquo;{{ search }}&rdquo;. {% else %} No
     grades to rank yet. {% endif %}
